@@ -453,7 +453,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you have questions, feedback, or need support:
 
-- **Email**: [GitHub Issues](mailto:ravindhar.upm@gmail.com)
+- **Email**: [Gmail](mailto:ravindhar.upm@gmail.com)
 - **LinkedIn**: [LinkedIn](https://www.linkedin.com/in/ravindhar-cy/)
 - **Portfolio**: https://ravindharcys.github.io/Portfolio/
 
