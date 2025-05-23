@@ -93,8 +93,8 @@ Whether you're investigating a domain, IP address, or URL, ReconPy aims to provi
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/RavindharCYS/reconpy.git
-   cd reconpy
+   git clone https://github.com/RavindharCYS/Recon_tool.git
+   cd Recon_tool
    ```
 
 2. **Create and Activate a Virtual Environment (Recommended):**
