@@ -1,0 +1,2 @@
+[console_scripts]
+reconpy = recon_tool.main:main_entry

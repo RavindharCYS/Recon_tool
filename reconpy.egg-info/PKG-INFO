@@ -1,0 +1,373 @@
+Metadata-Version: 2.4
+Name: reconpy
+Version: 0.1.0
+Summary: A cross-platform Python CLI reconnaissance tool.
+Home-page: https://github.com/yourusername/recon_tool
+Author: Your Name
+Author-email: your.email@example.com
+Project-URL: Bug Reports, https://github.com/yourusername/recon_tool/issues
+Project-URL: Source, https://github.com/yourusername/recon_tool/
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Information Technology
+Classifier: Topic :: Security
+Classifier: Topic :: Utilities
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: click>=8.0
+Requires-Dist: tabulate>=0.8.9
+Requires-Dist: colorama>=0.4.4
+Requires-Dist: python-dotenv>=0.19
+Requires-Dist: cryptography>=3.4.7
+Requires-Dist: requests>=2.25.1
+Requires-Dist: urllib3>=1.26.5
+Requires-Dist: dnspython>=2.1.0
+Requires-Dist: ipaddress>=1.0.23
+Requires-Dist: python-whois>=0.7.3
+Requires-Dist: beautifulsoup4>=4.9.3
+Requires-Dist: lxml>=4.6.3
+Requires-Dist: html5lib>=1.1
+Requires-Dist: Pillow>=9.0.0
+Requires-Dist: shodan>=1.27.0
+Requires-Dist: censys>=2.0.8
+Requires-Dist: python-nmap>=0.7.1
+Requires-Dist: PyYAML>=6.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: project-url
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# ReconPy - Advanced Reconnaissance Toolkit
+
+![ReconPy Banner](https://img.shields.io/badge/ReconPy-Advanced%20Reconnaissance-blue?style=for-the-badge)
+![Python Version](https://img.shields.io/badge/python-3.8+-brightgreen?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-cross--platform-lightgrey?style=flat-square)
+
+ReconPy is a comprehensive, cross-platform Python CLI reconnaissance tool designed for security professionals, penetration testers, and ethical hackers. It combines passive and active reconnaissance techniques in a modular, extensible framework.
+
+## 🚀 Features
+
+### Passive Reconnaissance
+- **WHOIS Lookups**: Retrieve domain registration information
+- **DNS Enumeration**: Perform various DNS lookups (A, AAAA, MX, NS, TXT, SOA)
+- **Web Scraping**: Extract information from websites including links, emails, and technologies
+- **Shodan Integration**: Search for internet-connected devices and services
+- **Censys Integration**: Find information about certificates and internet-exposed devices
+- **Social Media OSINT**: Find profiles and information across social platforms
+- **Wayback Machine**: Analyze historical versions of websites
+- **Public Repository Scanning**: Search GitHub and other platforms for sensitive information
+- **Image Metadata Extraction**: Extract EXIF data from images
+
+### Active Reconnaissance
+- **Port Scanning**: Fast TCP/UDP port scanning with service detection
+- **Nmap Integration**: Advanced scanning with OS detection and version fingerprinting
+- **Ping & Traceroute**: Network path analysis and host discovery
+- **Banner Grabbing**: Identify services running on open ports
+- **WAF Detection**: Identify web application firewalls and security measures
+- **Web Vulnerability Scanning**: Detect common web server misconfigurations
+
+## 📋 Prerequisites
+
+- Python 3.8 or higher
+- pip (Python package manager)
+- For some features: Nmap (`apt install nmap`, `brew install nmap`, or [download for Windows](https://nmap.org/download.html))
+
+## 🛠️ Installation
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/RavindharCYS/reconpy.git
+cd reconpy
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Set up API keys (Optional, but recommended)
+
+ReconPy can use several APIs to enhance its capabilities. You can configure these with:
+
+```bash
+python -m recon_tool api configure
+```
+
+Or set environment variables:
+
+```bash
+# For Shodan
+export SHODAN_API_KEY="your_api_key"
+
+# For Censys
+export CENSYS_API_ID="your_api_id"
+export CENSYS_API_SECRET="your_api_secret"
+
+# For GitHub
+export GITHUB_API_TOKEN="your_github_token"
+```
+
+## 📖 Usage
+
+### Basic Commands
+
+```bash
+# Get help
+python -m recon_tool --help
+
+# List all API configurations
+python -m recon_tool api list
+
+# Configure APIs interactively
+python -m recon_tool api configure
+
+# Check which modules need API keys
+python -m recon_tool api check
+```
+
+### Passive Reconnaissance
+
+```bash
+# WHOIS lookup
+python -m recon_tool passive whois example.com
+
+# DNS enumeration
+python -m recon_tool passive dns example.com --type ALL
+
+# Web scraping
+python -m recon_tool passive web https://example.com --depth 2
+
+# Shodan search
+python -m recon_tool passive shodan 8.8.8.8
+python -m recon_tool passive shodan --query "org:Microsoft"
+
+# Censys search
+python -m recon_tool passive censys 8.8.8.8
+python -m recon_tool passive censys example.com --certificates
+
+# Social media profile search
+python -m recon_tool passive social johndoe
+python -m recon_tool passive social user@example.com --email
+
+# Wayback Machine history
+python -m recon_tool passive wayback example.com
+
+# GitHub repository search
+python -m recon_tool passive repos example.com
+python -m recon_tool passive repos example.com --check-leaks
+
+# Extract EXIF metadata
+python -m recon_tool passive exif https://example.com/image.jpg
+python -m recon_tool passive exif /path/to/local/image.jpg --analyze
+```
+
+### Active Reconnaissance
+
+```bash
+# Port scanning
+python -m recon_tool active scan 192.168.1.1 --ports 1-1000 --method tcp
+
+# Nmap scanning
+python -m recon_tool active nmap 192.168.1.1 --scan-type sV
+
+# Ping a host
+python -m recon_tool active ping example.com --count 5
+
+# Traceroute
+python -m recon_tool active traceroute example.com
+
+# Banner grabbing
+python -m recon_tool active banner 192.168.1.1 --port 80
+
+# WAF detection
+python -m recon_tool active waf https://example.com
+
+# Web vulnerability scanning
+python -m recon_tool active webscan https://example.com --full
+```
+
+### Utility Commands
+
+```bash
+# Validate inputs
+python -m recon_tool util validate example.com
+python -m recon_tool util validate 192.168.1.1 --type ip
+
+# Format conversion
+python -m recon_tool util format results.json --output csv --output-file results.csv
+```
+
+## 📊 Output Formats
+
+You can specify different output formats for any command:
+
+```bash
+# JSON output
+python -m recon_tool passive dns example.com --output json
+
+# CSV output
+python -m recon_tool active scan 192.168.1.1 --output csv
+
+# Default text output
+python -m recon_tool passive whois example.com
+```
+
+## 📁 Project Structure
+
+```
+recon_tool/
+│
+├── __init__.py
+├── main.py                 # Main CLI entry point
+├── config.py              # Configuration and settings
+├── requirements.txt       # Python dependencies
+├── README.md             # This file
+├── .gitignore            # Git ignore rules
+│
+├── modules/              # Core functionality
+│   ├── __init__.py
+│   │
+│   ├── passive/          # Passive reconnaissance modules
+│   │   ├── __init__.py
+│   │   ├── whois_lookup.py      # WHOIS domain lookups
+│   │   ├── dns_enum.py          # DNS enumeration
+│   │   ├── web_scraper.py       # Web content scraping
+│   │   ├── shodan_search.py     # Shodan API integration
+│   │   ├── censys_search.py     # Censys API integration
+│   │   ├── social_media.py      # Social media OSINT
+│   │   ├── wayback_machine.py   # Internet Archive integration
+│   │   ├── public_repos.py      # GitHub/repository scanning
+│   │   └── exif_metadata.py     # Image metadata extraction
+│   │
+│   └── active/           # Active reconnaissance modules
+│       ├── __init__.py
+│       ├── nmap_scanner.py      # Nmap integration
+│       ├── port_scanner.py      # Custom port scanning
+│       ├── ping_traceroute.py   # Network path analysis
+│       ├── banner_grabber.py    # Service banner grabbing
+│       ├── waf_detector.py      # WAF detection
+│       └── web_vulnerabilities.py # Web vulnerability scanning
+│
+└── utils/                # Utility functions
+    ├── __init__.py
+    ├── validators.py      # Input validation
+    ├── formatters.py      # Output formatting
+    ├── network_helpers.py # Network utility functions
+    └── logger.py          # Logging configuration
+```
+
+## 🔧 Extending ReconPy
+
+ReconPy is designed to be modular and extensible. You can add new modules by:
+
+1. Creating a new Python file in the appropriate directory (`modules/passive/` or `modules/active/`)
+2. Implementing the required functions following the existing module patterns
+3. Adding a new command in `main.py` that calls your module
+4. Testing your module thoroughly
+
+### Example Module Structure
+
+```python
+# modules/passive/example_module.py
+import argparse
+from typing import Dict, Any
+
+def run(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Main function for the module
+    Args:
+        args: Parsed command line arguments
+    Returns:
+        Dict containing results
+    """
+    # Your implementation here
+    pass
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """
+    Add module-specific arguments to the parser
+    Args:
+        parser: ArgumentParser instance
+    """
+    parser.add_argument('--example-arg', help='Example argument')
+```
+
+## ⚖️ Ethical Usage
+
+**⚠️ IMPORTANT:** This tool is designed for legal security testing and educational purposes only.
+
+### Always Remember To:
+- Only scan systems you own or have explicit permission to test
+- Follow responsible disclosure procedures for any vulnerabilities discovered
+- Adhere to all applicable laws and regulations in your jurisdiction
+- Be mindful of rate limiting and don't overwhelm target systems
+- Respect robots.txt and website terms of service
+- Use the tool responsibly and ethically
+
+### Legal Disclaimer
+The developers of ReconPy are not responsible for any misuse of this tool. Users are solely responsible for ensuring their use complies with all applicable laws and regulations.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+### How to Contribute:
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Contribution Guidelines:
+- Follow Python PEP 8 style guidelines
+- Add appropriate documentation and comments
+- Include tests for new functionality
+- Update the README if necessary
+
+## 🙏 Acknowledgements
+
+- [Shodan](https://www.shodan.io/) - IoT search engine
+- [Censys](https://censys.io/) - Internet-wide scanner
+- [Wayback Machine](https://web.archive.org/) - Website history archive
+- [Nmap](https://nmap.org/) - Network scanning tool
+- All the open-source libraries that make this tool possible
+
+## 📞 Contact
+
+If you have questions, feedback, or need support:
+
+- **Issues**: [GitHub Issues](https://github.com/yourusername/reconpy/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/reconpy/discussions)
+- **Security Issues**: Please report security vulnerabilities privately
+
+## 🔄 Changelog
+
+### v1.0.0
+- Initial release
+- Basic passive and active reconnaissance modules
+- API integrations for Shodan, Censys, and GitHub
+- Multiple output formats support
+
+---
+
+**Star ⭐ this repository if you find it useful!**

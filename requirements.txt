@@ -1,0 +1,45 @@
+# Core CLI and utility
+click>=8.0
+tabulate>=0.8.9
+colorama>=0.4.4 # For colored output, especially on Windows (Click handles some of this)
+python-dotenv>=0.19 # For .env file support if you decide to use it for config
+
+# Cryptography for API key encryption
+cryptography>=3.4.7
+
+# HTTP Requests
+requests>=2.25.1
+urllib3>=1.26.5 # Often a dependency of requests, good to specify
+
+# DNS and Network
+dnspython>=2.1.0
+ipaddress>=1.0.23 # Built-in for Python 3.3+, but good to list if older Pythons were ever a target
+
+# WHOIS
+python-whois>=0.7.3 # For WHOIS lookups
+
+# Web Scraping and Parsing
+beautifulsoup4>=4.9.3
+lxml>=4.6.3 # Parser for BeautifulSoup
+html5lib>=1.1 # Alternative parser for BeautifulSoup
+
+# Image Metadata (EXIF)
+Pillow>=9.0.0
+
+# API Client Libraries (ensure these match what your modules actually import)
+shodan>=1.27.0 # Check latest version
+censys>=2.0.8  # Check latest version; Censys SDK v2 is preferred
+# github3.py>=3.2.0 # Your public_repos.py uses requests directly, not this lib. Remove if not used.
+
+# Nmap (Python wrapper, Nmap binary must be installed separately)
+python-nmap>=0.7.1
+
+# YAML for potential config/workflow files (though your current formatters use it for file conversion)
+PyYAML>=6.0
+
+# Optional for advanced output or data handling if you extend:
+# pandas>=1.3.0
+# matplotlib>=3.4.2
+
+# SSL/TLS (often dependencies of requests, but can be explicit)
+# pyOpenSSL>=20.0.1 # Not directly imported, requests handles SSL with system libs or its own vendored ones usually
