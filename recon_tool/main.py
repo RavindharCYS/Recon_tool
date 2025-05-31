@@ -5,25 +5,24 @@ Main entry point for the application
 """
 import sys
 import click
-from typing import Optional
+from typing import Optional, Tuple, Dict, List, Any
 import importlib
 import os
 import json
-import datetime # Changed from datetime.datetime to just datetime
+import datetime
 from tabulate import tabulate
-from urllib.parse import urlparse # Added for robust domain extraction
-import re # Already imported, just confirming
+from urllib.parse import urlparse
+import re
 
 # Import configuration
-from . import config # Adjusted for package structure
+from . import config # config.py will now have the updated RESULTS_DIR
 
 # Import utilities
 from .utils.logger import setup_logger, get_logger
-from .utils.validators import is_valid_ip, is_valid_domain, is_valid_url, is_valid_email # Added email validator
+from .utils.validators import is_valid_ip, is_valid_domain, is_valid_url, is_valid_email
 
 # Initialize logger
-# Moved setup_logger call into cli() to ensure it's called after verbosity options are processed
-logger = get_logger(__name__) # Using __name__ for better log organization
+logger = get_logger(__name__)
 
 # Banner for the CLI
 BANNER = r"""
@@ -39,136 +38,125 @@ BANNER = r"""
 
 @click.group()
 @click.version_option(version=config.VERSION)
-@click.option('--verbose', '-v', count=True, help='Increase verbosity')
+@click.option('--verbose', '-v', count=True, help='Increase verbosity (e.g., -v, -vv)')
 @click.option('--quiet', '-q', is_flag=True, help='Suppress non-error output')
-@click.option('--output', '-o', type=click.Choice(['text', 'json', 'csv']),
+@click.option('--output', '-o', type=click.Choice(['text', 'json', 'csv', 'html']),
               default=config.DEFAULT_CONFIG["output_format"], help='Output format')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 def cli(verbose: int, quiet: bool, output: str, no_color: bool):
     """
     ReconPy: A cross-platform reconnaissance toolkit for security professionals
-
-    Use this tool responsibly and only on systems you have permission to test.
     """
-    # Set verbosity level
-    if quiet:
-        verbosity = config.VerbosityLevel.QUIET
-    elif verbose == 1:
-        verbosity = config.VerbosityLevel.VERBOSE
-    elif verbose >= 2: # -vv or more
-        verbosity = config.VerbosityLevel.DEBUG
-    else:
-        verbosity = config.VerbosityLevel.NORMAL
+    if quiet: verbosity = config.VerbosityLevel.QUIET
+    elif verbose == 1: verbosity = config.VerbosityLevel.VERBOSE
+    elif verbose >= 2: verbosity = config.VerbosityLevel.DEBUG
+    else: verbosity = config.VerbosityLevel.NORMAL
 
     config.DEFAULT_CONFIG["verbosity"] = verbosity
     config.DEFAULT_CONFIG["output_format"] = output
     config.DEFAULT_CONFIG["use_color"] = not no_color
-
-    # Initialize logger after verbosity is set
     setup_logger(verbosity)
 
     if not quiet:
-        if config.DEFAULT_CONFIG["use_color"]:
-            click.echo(click.style(BANNER, fg='blue', bold=True))
-        else:
-            click.echo(BANNER)
+        click.echo(click.style(BANNER, fg='blue', bold=True) if config.DEFAULT_CONFIG["use_color"] else BANNER)
         click.echo(f"Version: {config.VERSION}\n")
 
-# All-in-one reconnaissance command
 @cli.command('recon')
 @click.argument('target')
 @click.option('--passive-only', is_flag=True, help='Only perform passive reconnaissance')
 @click.option('--active-only', is_flag=True, help='Only perform active reconnaissance')
-@click.option('--output-dir', '-d', type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True), help='Directory to save results')
-@click.option('--report', '-r', is_flag=True, help='Generate a consolidated report')
+@click.option('--output-dir', '-d', type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True), help='Directory to save results (overrides default local project results folder)')
+@click.option('--report', '-r', is_flag=True, help='Generate individual module HTMLs and a single consolidated HTML report, plus individual JSON files')
 @click.option('--ports', '-p', default='1-1000', help='Port range for scanning')
-@click.option('--threads', '-t', type=int, default=config.DEFAULT_CONFIG["max_threads"], help='Number of threads for scanning')
-def all_in_one_recon(target, passive_only, active_only, output_dir, report, ports, threads):
+@click.option('--threads', '-t', type=int, default=config.DEFAULT_CONFIG["max_threads"], help='Number of threads')
+def all_in_one_recon(target: str, passive_only: bool, active_only: bool, output_dir: Optional[str], report: bool, ports: str, threads: int):
     """
-    Perform comprehensive reconnaissance on a target
-
-    This command executes multiple reconnaissance modules in sequence to gather
-    extensive information about the target. It automatically determines the target
-    type (domain, IP, URL) and runs appropriate modules.
-
-    Example: reconpy recon example.com --report
+    Perform comprehensive reconnaissance on a target.
     """
+    current_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    target_type: Optional[str] = None
+    domain: Optional[str] = None
 
-    # Create timestamp for report
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Determine target type and extract domain if URL
-    target_type = None
-    domain = None # Initialize domain
-
-    if is_valid_ip(target):
-        target_type = "ip"
-        click.echo(f"[+] Target {target} identified as an IP address")
-        # For IP targets, domain might be resolved via reverse DNS if needed by modules
+    if is_valid_ip(target): target_type = "ip"
     elif is_valid_url(target):
         target_type = "url"
-        click.echo(f"[+] Target {target} identified as a URL")
         try:
             parsed_url = urlparse(target)
-            domain = parsed_url.netloc
-            if ':' in domain: # Remove port if present in netloc
-                domain = domain.split(':')[0]
+            domain = parsed_url.netloc.split(':')[0]
         except Exception as e:
             logger.error(f"Could not parse domain from URL {target}: {e}")
-            click.echo(f"[!] Error parsing domain from URL {target}. Some domain-specific modules might fail.")
-            domain = target # Fallback, might not be a valid domain
+            domain = target # Fallback
     elif is_valid_domain(target):
         target_type = "domain"
         domain = target
-        click.echo(f"[+] Target {target} identified as a domain name")
     else:
         click.echo(f"[!] Unable to determine target type for {target}")
-        if not click.confirm("Continue anyway?"):
-            sys.exit(1)
+        if not click.confirm("Continue anyway?"): sys.exit(1)
+        domain = target # Fallback
 
-    # Set up output directory
-    effective_output_dir = output_dir
-    if not effective_output_dir and config.DEFAULT_CONFIG.get("save_results", False):
-        effective_output_dir = os.path.join(config.RESULTS_DIR, f"{target.replace('/', '_')}_{timestamp}")
-        click.echo(f"[+] Defaulting output to: {effective_output_dir}")
-
+    # Determine output directory
+    # Priority: --output-dir > config.RESULTS_DIR (now local)
+    effective_output_dir: Optional[str] = None
+    safe_target_for_dir = re.sub(r'[^\w\-_\.]', '_', target)
+    # If --output-dir is given, use it directly
+    if output_dir:
+        effective_output_dir = os.path.join(output_dir, f"{safe_target_for_dir}_{current_timestamp}")
+    # Else, if report is true OR general saving is enabled, use default config.RESULTS_DIR
+    elif report or config.DEFAULT_CONFIG.get("save_results", False):
+        effective_output_dir = os.path.join(config.RESULTS_DIR, f"{safe_target_for_dir}_{current_timestamp}")
+    
     if effective_output_dir:
+        click.echo(f"[+] Output will be saved in: {effective_output_dir}")
         try:
             os.makedirs(effective_output_dir, exist_ok=True)
         except OSError as e:
-            click.echo(f"[!] Error creating output directory {effective_output_dir}: {e}. Results will not be saved to files.")
-            effective_output_dir = None # Disable file saving
+            click.echo(f"[!] Error creating output directory {effective_output_dir}: {e}. File saving disabled.")
+            effective_output_dir = None # Disable saving if dir creation fails
+            if report: # If report was requested but dir fails, inform user
+                 click.echo("[!] Reporting disabled due to output directory creation failure.")
 
-    # Initialize report data
-    report_data = {
-        "target": target,
-        "target_type": target_type,
-        "timestamp": timestamp,
-        "modules_run": [],
-        "results": {}
+
+    report_data: Dict[str, Any] = {
+        "target": target, "target_type": target_type, "timestamp": current_timestamp,
+        "scan_parameters": {"passive_only": passive_only, "active_only": active_only, "ports": ports, "threads": threads},
+        "modules_run": [], "results": {}
     }
 
-    def save_module_result(module_name, result_data): # Renamed 'result' to 'result_data'
-        """Helper function to save module results to report and file"""
+    def save_module_result(module_name: str, result_data: Dict[str, Any]):
         report_data["results"][module_name] = result_data
-        report_data["modules_run"].append(module_name)
+        if module_name not in report_data["modules_run"]:
+            report_data["modules_run"].append(module_name)
 
-        if effective_output_dir and config.DEFAULT_CONFIG.get("save_results", True):
-            # Sanitize target name for filename
+        # Save individual JSON and HTML if an output directory is effectively set
+        if effective_output_dir: # No need to check config.DEFAULT_CONFIG["save_results"] here, dir presence implies intent
             safe_target_name = re.sub(r'[^\w\-_\.]', '_', target)
-            result_file = os.path.join(effective_output_dir, f"{safe_target_name}_{module_name}_{timestamp}.json")
+            base_filename = os.path.join(effective_output_dir, f"{safe_target_name}_{module_name}_{current_timestamp}")
+            
+            # Save individual JSON
             try:
-                with open(result_file, 'w') as f:
-                    json.dump(result_data, f, indent=2, default=str) # Added default=str for non-serializable types
-                click.echo(f"[+] {module_name.capitalize()} results saved to: {result_file}")
+                with open(f"{base_filename}.json", 'w', encoding='utf-8') as f_json:
+                    json.dump(result_data, f_json, indent=2, default=str)
+                click.echo(f"[+] {module_name.capitalize()} JSON results saved to: {base_filename}.json")
             except IOError as e:
-                 click.echo(f"[!] Error saving {module_name} results to {result_file}: {e}")
+                 click.echo(f"[!] Error saving {module_name} JSON results: {e}")
 
-    # Perform passive reconnaissance
+            # Save individual HTML (if report flag is true or if global output is html)
+            # For `all_in_one_recon`, we only save individual HTMLs if --report is on.
+            if report:
+                try:
+                    from .utils.formatters import format_output
+                    # Pass the module name to format_output so it can make a specific title
+                    html_content_module = format_output(result_data, output_format="html")
+                    with open(f"{base_filename}.html", 'w', encoding='utf-8') as f_html:
+                        f_html.write(html_content_module)
+                    click.echo(f"[+] {module_name.capitalize()} HTML results saved to: {base_filename}.html")
+                except Exception as e_fmt:
+                     click.echo(f"[!] Error formatting/saving HTML for {module_name}: {e_fmt}")
+                     logger.error(f"Error formatting/saving HTML for {module_name}: {e_fmt}", exc_info=True)
+
+    # --- Passive Reconnaissance Modules ---
     if not active_only:
         click.echo("\n" + click.style("=== PASSIVE RECONNAISSANCE ===", fg="green" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
-
-        # WHOIS lookup (for domains/URLs with extracted domain)
         if domain and target_type in ["domain", "url"]:
             click.echo("\n" + click.style("Running WHOIS lookup...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
@@ -176,316 +164,226 @@ def all_in_one_recon(target, passive_only, active_only, output_dir, report, port
                 whois_result = lookup(domain)
                 _display_result(whois_result)
                 save_module_result("whois", whois_result)
-            except Exception as e:
-                click.echo(f"[!] WHOIS lookup failed: {str(e)}")
+            except Exception as e: click.echo(f"[!] WHOIS lookup failed: {str(e)}"); logger.error(f"WHOIS lookup failed: {e}", exc_info=True)
 
-        # DNS lookup (for domains/URLs with extracted domain)
         if domain and target_type in ["domain", "url"]:
             click.echo("\n" + click.style("Running DNS enumeration...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
                 from .modules.passive.dns_enum import lookup
-                dns_result = lookup(domain, record_types=['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA'])
+                dns_result = lookup(domain, record_types=['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME'])
                 _display_result(dns_result)
                 save_module_result("dns", dns_result)
-
-                # Extract IP addresses for further scanning if available
-                # Ensure dns_result and 'records' key exist before accessing
-                if dns_result and 'records' in dns_result and 'A' in dns_result['records']:
-                    # dns_result['records']['A'] is a list of dicts
+                if dns_result and 'records' in dns_result and isinstance(dns_result['records'],dict) and 'A' in dns_result['records']:
                     a_records_list = dns_result['records']['A']
-                    if isinstance(a_records_list, list) and a_records_list:
-                        ip_address = a_records_list[0].get('value') # Use specific var name
-                        if ip_address:
-                             click.echo(f"[+] Primary IP address from DNS: {ip_address}")
-            except Exception as e:
-                click.echo(f"[!] DNS enumeration failed: {str(e)}")
+                    if isinstance(a_records_list, list) and a_records_list and isinstance(a_records_list[0],dict):
+                        ip_address_from_dns = a_records_list[0].get('value')
+                        if ip_address_from_dns: click.echo(f"[+] Primary IP address from DNS: {ip_address_from_dns}")
+            except Exception as e: click.echo(f"[!] DNS enumeration failed: {str(e)}"); logger.error(f"DNS enumeration failed: {e}", exc_info=True)
 
-        # Web scraping (for URLs)
         if target_type == "url":
             click.echo("\n" + click.style("Running web scraping...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
                 from .modules.passive.web_scraper import scrape
-                web_result = scrape(target, depth=1)
+                web_result = scrape(target, depth=0)
                 _display_result(web_result)
                 save_module_result("web_scrape", web_result)
-            except Exception as e:
-                click.echo(f"[!] Web scraping failed: {str(e)}")
+            except Exception as e: click.echo(f"[!] Web scraping failed: {str(e)}"); logger.error(f"Web scraping failed: {e}", exc_info=True)
 
-        # Shodan search
         click.echo("\n" + click.style("Running Shodan search...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        api_check = config.check_api_requirements("reconpy.modules.passive.shodan_search")
-        if api_check["all_configured"]:
+        api_check_shodan = config.check_api_requirements("reconpy.modules.passive.shodan_search")
+        if api_check_shodan["all_configured"]:
             try:
                 from .modules.passive.shodan_search import search_ip, search_query
+                shodan_result: Dict[str, Any] = {}
+                if target_type == "ip": shodan_result = search_ip(target)
+                elif domain: shodan_result = search_query(f"hostname:{domain}")
+                else: shodan_result = {"info": "Domain not available for Shodan query."}
+                _display_result(shodan_result); save_module_result("shodan", shodan_result)
+            except Exception as e: click.echo(f"[!] Shodan search failed: {str(e)}"); logger.error(f"Shodan search failed: {e}", exc_info=True)
+        else: _handle_missing_api_key_prompt("shodan", "Shodan")
 
-                if target_type == "ip":
-                    shodan_result = search_ip(target)
-                elif domain: # Only search if domain is available
-                    shodan_result = search_query(f"hostname:{domain}")
-                else:
-                    shodan_result = {"info": "Domain not available for Shodan query."}
-
-                _display_result(shodan_result)
-                save_module_result("shodan", shodan_result)
-            except Exception as e:
-                click.echo(f"[!] Shodan search failed: {str(e)}")
-        else:
-            click.echo("[!] Shodan search skipped (API key not configured). Use 'recon-tool api configure shodan' to set it up.")
-
-        # Censys search
         click.echo("\n" + click.style("Running Censys search...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        api_check = config.check_api_requirements("reconpy.modules.passive.censys_search")
-        if api_check["all_configured"]:
+        api_check_censys = config.check_api_requirements("reconpy.modules.passive.censys_search")
+        if api_check_censys["all_configured"]:
             try:
                 from .modules.passive.censys_search import search_ip, search_certificates
+                censys_result: Dict[str, Any] = {}
+                if target_type == "ip": censys_result = search_ip(target)
+                elif domain: censys_result = search_certificates(domain)
+                else: censys_result = {"info": "Domain not available for Censys search."}
+                _display_result(censys_result); save_module_result("censys", censys_result)
+            except Exception as e: click.echo(f"[!] Censys search failed: {str(e)}"); logger.error(f"Censys search failed: {e}", exc_info=True)
+        else: _handle_missing_api_key_prompt("censys", "Censys")
 
-                if target_type == "ip":
-                    censys_result = search_ip(target)
-                elif domain: # Only search if domain is available
-                    censys_result = search_certificates(domain)
-                else:
-                    censys_result = {"info": "Domain not available for Censys certificate search."}
-
-                _display_result(censys_result)
-                save_module_result("censys", censys_result)
-            except Exception as e:
-                click.echo(f"[!] Censys search failed: {str(e)}")
-        else:
-            click.echo("[!] Censys search skipped (API keys not configured). Use 'recon-tool api configure censys' to set it up.")
-
-        # Wayback Machine search (for domains/URLs with extracted domain)
         if domain and target_type in ["domain", "url"]:
             click.echo("\n" + click.style("Running Wayback Machine search...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
                 from .modules.passive.wayback_machine import get_snapshots
-                wayback_result = get_snapshots(domain, limit=20)
-                _display_result(wayback_result)
-                save_module_result("wayback", wayback_result)
-            except Exception as e:
-                click.echo(f"[!] Wayback Machine search failed: {str(e)}")
+                wayback_result = get_snapshots(domain, limit=10)
+                _display_result(wayback_result); save_module_result("wayback", wayback_result)
+            except Exception as e: click.echo(f"[!] Wayback Machine search failed: {str(e)}"); logger.error(f"Wayback Machine search failed: {e}", exc_info=True)
 
-        # Repository search (for domains/URLs with extracted domain)
         if domain and target_type in ["domain", "url"]:
-            click.echo("\n" + click.style("Running repository search...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-            api_check = config.check_api_requirements("reconpy.modules.passive.public_repos")
-            if api_check["all_configured"]:
+            click.echo("\n" + click.style("Running repository search (GitHub)...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+            api_check_github = config.check_api_requirements("reconpy.modules.passive.public_repos")
+            if api_check_github["all_configured"]:
                 try:
                     from .modules.passive.public_repos import search_repositories_for_domain
                     repo_result = search_repositories_for_domain(domain)
-                    _display_result(repo_result)
-                    save_module_result("repos", repo_result)
-                except Exception as e:
-                    click.echo(f"[!] Repository search failed: {str(e)}")
-            else:
-                click.echo("[!] Repository search may be limited or fail (GitHub API key not configured). Use 'recon-tool api configure github' to set it up.")
+                    _display_result(repo_result); save_module_result("repos", repo_result)
+                except Exception as e: click.echo(f"[!] Repository search failed: {str(e)}"); logger.error(f"Repository search failed: {e}", exc_info=True)
+            else: _handle_missing_api_key_prompt("github", "GitHub", "Repository search may be limited.")
 
 
-    # Perform active reconnaissance
+    # --- Active Reconnaissance Modules ---
     if not passive_only:
         click.echo("\n" + click.style("=== ACTIVE RECONNAISSANCE ===", fg="yellow" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
-
         target_for_active_scan = target
-        if target_type == "url" and domain:
-            target_for_active_scan = domain # Use domain for ping, traceroute, port scan if original target was URL
+        if target_type == "url" and domain: target_for_active_scan = domain
         elif target_type == "domain":
-            target_for_active_scan = target # Already a domain or IP
-
-        # Ping test
-        click.echo("\n" + click.style("Running ping test...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        try:
-            from .modules.active.ping_traceroute import ping
-            ping_result = ping(target_for_active_scan, count=4)
-            _display_result(ping_result)
-            save_module_result("ping", ping_result)
-        except Exception as e:
-            click.echo(f"[!] Ping test failed: {str(e)}")
-
-        # Traceroute
-        click.echo("\n" + click.style("Running traceroute...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        try:
-            from .modules.active.ping_traceroute import traceroute
-            traceroute_result = traceroute(target_for_active_scan, max_hops=20)
-            _display_result(traceroute_result)
-            save_module_result("traceroute", traceroute_result)
-        except Exception as e:
-            click.echo(f"[!] Traceroute failed: {str(e)}")
-
-        # Port scanning
-        click.echo("\n" + click.style("Running port scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        try:
-            from .modules.active.port_scanner import scan as port_scan_func # Renamed to avoid conflict
-            port_scan_result = port_scan_func(target_for_active_scan, ports=ports, method='tcp', threads=threads)
-            _display_result(port_scan_result)
-            save_module_result("port_scan", port_scan_result)
-
-            # Banner grabbing for open ports
-            # Ensure port_scan_result and relevant keys exist
-            if port_scan_result and "open_ports" in port_scan_result and "tcp" in port_scan_result["open_ports"] and port_scan_result["open_ports"]["tcp"]:
-                open_tcp_ports_info = port_scan_result["open_ports"]["tcp"]
-                open_tcp_ports = [p_info["port"] for p_info in open_tcp_ports_info if "port" in p_info]
-
-                if open_tcp_ports:
-                    click.echo("\n" + click.style("Running banner grabbing on open TCP ports...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-                    banner_results = {"target": target_for_active_scan, "banners": {}}
-
-                    from .modules.active.banner_grabber import grab_banner
-                    for port_num in open_tcp_ports[:5]:  # Limit to first 5 ports to avoid too much time
-                        click.echo(f"  Grabbing banner from port {port_num}...")
-                        try:
-                            port_result = grab_banner(target_for_active_scan, port=port_num, protocol='tcp')
-                            banner_results["banners"][str(port_num)] = port_result.get("banner_text", port_result.get("error", "No banner/Error")) # Changed from banner to banner_text
-                        except Exception as e:
-                            banner_results["banners"][str(port_num)] = f"Error: {str(e)}"
-
-                    _display_result(banner_results)
-                    save_module_result("banners", banner_results)
-        except Exception as e:
-            click.echo(f"[!] Port scanning or banner grabbing failed: {str(e)}")
-
-        # Nmap scanning if available
-        click.echo("\n" + click.style("Running Nmap scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-        try:
-            from .modules.active.nmap_scanner import scan as nmap_scan_func # Renamed
-            nmap_result = nmap_scan_func(target_for_active_scan, ports=ports, scan_type='sT')
-            _display_result(nmap_result)
-            save_module_result("nmap", nmap_result)
-        except ImportError: # This will catch if python-nmap is not installed or Nmap binary is missing
-            click.echo("[!] Nmap scanning skipped (Nmap library or Nmap itself not available/installed).")
-        except Exception as e: # Catch other errors during Nmap scan execution
-            click.echo(f"[!] Nmap scanning failed: {str(e)}")
-
-        # Web-specific tests for URLs
-        if target_type == "url":
-            # WAF detection
-            click.echo("\n" + click.style("Detecting Web Application Firewall...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+            if domain and not is_valid_ip(domain):
+                try:
+                    resolved_ip_for_active = get_ip_from_domain(domain)
+                    click.echo(f"[+] Resolved {domain} to {resolved_ip_for_active} for active scans.")
+                    target_for_active_scan = resolved_ip_for_active
+                except Exception:
+                    click.echo(f"[!] Could not resolve {domain} to IP. Active scans might use the domain name directly.")
+                    target_for_active_scan = domain
+            else: target_for_active_scan = domain
+        
+        if not target_for_active_scan: click.echo("[!] No valid target for active scans. Skipping active phase.")
+        else:
+            click.echo("\n" + click.style("Running ping test...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
-                from .modules.active.waf_detector import detect
-                waf_result = detect(target) # Use original URL target for WAF
-                _display_result(waf_result)
-                save_module_result("waf", waf_result)
-            except Exception as e:
-                click.echo(f"[!] WAF detection failed: {str(e)}")
+                from .modules.active.ping_traceroute import ping as ping_func
+                ping_result = ping_func(target_for_active_scan, count=4)
+                _display_result(ping_result); save_module_result("ping", ping_result)
+            except Exception as e: click.echo(f"[!] Ping test failed: {str(e)}"); logger.error(f"Ping test failed: {e}", exc_info=True)
 
-            # Web vulnerability scan
-            click.echo("\n" + click.style("Running web vulnerability scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
-            api_check_vt = config.check_api_requirements("reconpy.modules.active.web_vulnerabilities") # VirusTotal for some checks
-            if not api_check_vt["all_configured"]:
-                 click.echo("[!] Some web vulnerability checks might be limited (VirusTotal API key not configured).")
+            click.echo("\n" + click.style("Running traceroute...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
             try:
-                from .modules.active.web_vulnerabilities import scan as web_vuln_scan_func # Renamed
-                web_vuln_result = web_vuln_scan_func(target, full_scan=False) # Changed full to full_scan
-                _display_result(web_vuln_result)
-                save_module_result("web_vulns", web_vuln_result)
-            except Exception as e:
-                click.echo(f"[!] Web vulnerability scan failed: {str(e)}")
+                from .modules.active.ping_traceroute import traceroute as traceroute_func
+                traceroute_result = traceroute_func(target_for_active_scan, max_hops=20)
+                _display_result(traceroute_result); save_module_result("traceroute", traceroute_result)
+            except Exception as e: click.echo(f"[!] Traceroute failed: {str(e)}"); logger.error(f"Traceroute failed: {e}", exc_info=True)
 
-    # Generate consolidated report if requested
+            click.echo("\n" + click.style("Running port scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+            try:
+                from .modules.active.port_scanner import scan as port_scan_func
+                port_scan_result = port_scan_func(target_for_active_scan, ports=ports, method='tcp', threads=threads)
+                _display_result(port_scan_result); save_module_result("port_scan", port_scan_result)
+
+                if port_scan_result and "open_ports" in port_scan_result and \
+                   isinstance(port_scan_result.get("open_ports"), dict) and \
+                   isinstance(port_scan_result["open_ports"].get("tcp"), list) and \
+                   port_scan_result["open_ports"]["tcp"]:
+                    
+                    open_tcp_ports_info = port_scan_result["open_ports"]["tcp"]
+                    open_tcp_ports_numbers = [p_info["port"] for p_info in open_tcp_ports_info if isinstance(p_info, dict) and "port" in p_info]
+
+                    if open_tcp_ports_numbers:
+                        click.echo("\n" + click.style("Running banner grabbing on open TCP ports...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+                        banner_results_coll: Dict[str, Any] = {"target": target_for_active_scan, "banners": {}}
+                        from .modules.active.banner_grabber import grab_banner
+                        for port_num_banner in open_tcp_ports_numbers[:5]: # Limit banners for recon
+                            click.echo(f"  Grabbing banner from port {port_num_banner}...")
+                            try:
+                                single_banner_result = grab_banner(target_for_active_scan, port=port_num_banner, protocol='tcp')
+                                banner_results_coll["banners"][str(port_num_banner)] = single_banner_result
+                            except Exception as e_banner:
+                                banner_results_coll["banners"][str(port_num_banner)] = {"error": f"Banner grab error: {str(e_banner)}"}
+                                logger.error(f"Banner grab for port {port_num_banner} failed: {e_banner}", exc_info=True)
+                        _display_result(banner_results_coll); save_module_result("banners", banner_results_coll)
+            except Exception as e: click.echo(f"[!] Port scanning or banner grabbing failed: {str(e)}"); logger.error(f"Port scan/banner failed: {e}", exc_info=True)
+
+            click.echo("\n" + click.style("Running Nmap scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+            try:
+                from .modules.active.nmap_scanner import scan as nmap_scan_func, is_nmap_installed
+                if is_nmap_installed():
+                    nmap_result = nmap_scan_func(target_for_active_scan, ports=ports, scan_type='sT')
+                    _display_result(nmap_result); save_module_result("nmap", nmap_result)
+                else: click.echo("[!] Nmap binary not found. Skipping Nmap scan.")
+            except ImportError: click.echo("[!] Nmap scanning skipped (python-nmap library not available).")
+            except Exception as e: click.echo(f"[!] Nmap scanning failed: {str(e)}"); logger.error(f"Nmap scan failed: {e}", exc_info=True)
+
+            if target_type == "url":
+                click.echo("\n" + click.style("Detecting Web Application Firewall...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+                try:
+                    from .modules.active.waf_detector import detect as waf_detect_func
+                    waf_result = waf_detect_func(target)
+                    _display_result(waf_result); save_module_result("waf", waf_result)
+                except Exception as e: click.echo(f"[!] WAF detection failed: {str(e)}"); logger.error(f"WAF detection failed: {e}", exc_info=True)
+
+                click.echo("\n" + click.style("Running web vulnerability scan...", fg="cyan" if config.DEFAULT_CONFIG["use_color"] else None))
+                api_check_vt = config.check_api_requirements("reconpy.modules.active.web_vulnerabilities")
+                if not api_check_vt["all_configured"]: _handle_missing_api_key_prompt("virustotal", "VirusTotal", "Some web vulnerability checks might be limited.")
+                try:
+                    from .modules.active.web_vulnerabilities import scan as web_vuln_scan_func
+                    web_vuln_result = web_vuln_scan_func(target, full_scan=False)
+                    _display_result(web_vuln_result); save_module_result("web_vulns", web_vuln_result)
+                except Exception as e: click.echo(f"[!] Web vulnerability scan failed: {str(e)}"); logger.error(f"Web vulnerability scan failed: {e}", exc_info=True)
+
+    # --- Reporting ---
     if report and effective_output_dir:
-        click.echo("\n" + click.style("=== GENERATING RECONNAISSANCE REPORT ===", fg="blue" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
-
-        # Sanitize target name for filename
-        safe_target_name = re.sub(r'[^\w\-_\.]', '_', target)
-        report_file_path = os.path.join(effective_output_dir, f"{safe_target_name}_full_report_{timestamp}.json")
-
+        click.echo("\n" + click.style("=== GENERATING CONSOLIDATED REPORTS ===", fg="blue" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
+        safe_target_name_report = re.sub(r'[^\w\-_\.]', '_', target)
+        
+        # Consolidated JSON Report (contains all module data)
+        report_file_path_json = os.path.join(effective_output_dir, f"{safe_target_name_report}_consolidated_report_{current_timestamp}.json")
         try:
-            with open(report_file_path, 'w') as f:
-                json.dump(report_data, f, indent=2, default=str)
-            click.echo(f"[+] Full report saved to: {report_file_path}")
+            with open(report_file_path_json, 'w', encoding='utf-8') as f_json_report:
+                json.dump(report_data, f_json_report, indent=2, default=str)
+            click.echo(f"[+] Consolidated JSON report saved to: {report_file_path_json}")
         except IOError as e:
-            click.echo(f"[!] Error saving full report to {report_file_path}: {e}")
+            click.echo(f"[!] Error saving consolidated JSON report: {e}")
 
-        # Generate summary report with key findings
-        summary = {
-            "target": target,
-            "target_type": target_type,
-            "scan_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "modules_run": report_data["modules_run"],
-            "key_findings": {}
+        # SINGLE Consolidated HTML Report (contains all module data)
+        report_file_path_html = os.path.join(effective_output_dir, f"{safe_target_name_report}_consolidated_report_{current_timestamp}.html")
+        try:
+            from .utils.formatters import format_output
+            html_full_content = format_output(report_data, output_format="html")
+            with open(report_file_path_html, 'w', encoding='utf-8') as f_html_report:
+                f_html_report.write(html_full_content)
+            click.echo(f"[+] Consolidated HTML report saved to: {report_file_path_html}")
+        except Exception as e:
+            click.echo(f"[!] Error saving consolidated HTML report: {e}")
+            logger.error(f"Consolidated HTML report generation/saving failed: {e}", exc_info=True)
+        
+        # Text Summary for Console
+        click.echo("\n" + click.style("=== KEY FINDINGS (CONSOLE SUMMARY) ===", fg="green" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
+        summary_for_display: Dict[str, Any] = {
+            "Target": target, "Target Type": target_type, "Scan Time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Modules Run": ", ".join(report_data["modules_run"])
         }
+        if "dns" in report_data["results"] and isinstance(report_data["results"]["dns"], dict) and "records" in report_data["results"]["dns"]:
+            dns_recs = report_data["results"]["dns"]["records"]
+            if isinstance(dns_recs, dict) and "A" in dns_recs and isinstance(dns_recs["A"], list) and dns_recs["A"]:
+                primary_ip_val = dns_recs["A"][0].get("value", "N/A") if isinstance(dns_recs["A"][0], dict) else "N/A"
+                summary_for_display["Primary IP"] = primary_ip_val
+        
+        if "port_scan" in report_data["results"] and isinstance(report_data["results"]["port_scan"], dict):
+            ps_data = report_data["results"]["port_scan"]
+            if isinstance(ps_data.get("open_ports"), dict) and isinstance(ps_data["open_ports"].get("tcp"), list):
+                 open_ports_tcp_list = [str(p["port"]) for p in ps_data["open_ports"]["tcp"] if isinstance(p, dict) and "port" in p]
+                 if open_ports_tcp_list:
+                     summary_for_display["Open TCP Ports (first 5)"] = ", ".join(open_ports_tcp_list[:5]) + ("..." if len(open_ports_tcp_list) > 5 else "")
 
-        # Extract key information from module results
-        if "whois" in report_data["results"] and report_data["results"]["whois"] and "error" not in report_data["results"]["whois"]:
-            whois_data = report_data["results"]["whois"]
-            summary["key_findings"]["whois"] = {
-                "registrar": whois_data.get("registrar", "Unknown"),
-                "creation_date": whois_data.get("creation_date", "Unknown"),
-                "expiration_date": whois_data.get("expiration_date", "Unknown")
-            }
+        if "waf" in report_data["results"] and isinstance(report_data["results"]["waf"], dict):
+             waf_info = report_data["results"]["waf"]
+             summary_for_display["WAF Detected"] = waf_info.get("waf_detected", False)
+             if waf_info.get("waf_detected"): summary_for_display["WAF Name"] = waf_info.get("identified_waf_name", "Unknown")
 
-        if "dns" in report_data["results"] and report_data["results"]["dns"] and "error" not in report_data["results"]["dns"]:
-            dns_data = report_data["results"]["dns"].get("records", {})
-            summary["key_findings"]["dns"] = {
-                "a_records": [r.get('value') for r in dns_data.get("A", []) if r.get('value')],
-                "mx_records": [f"{r.get('preference')} {r.get('value')}" for r in dns_data.get("MX", []) if r.get('value')],
-                "ns_records": [r.get('value') for r in dns_data.get("NS", []) if r.get('value')]
-            }
+        if "web_vulns" in report_data["results"] and isinstance(report_data["results"]["web_vulns"], dict):
+            wv_info = report_data["results"]["web_vulns"]
+            if isinstance(wv_info.get("summary"), dict): summary_for_display["Web Vuln Summary"] = wv_info["summary"]
+        _display_result(summary_for_display)
 
-        if "port_scan" in report_data["results"] and report_data["results"]["port_scan"] and "error" not in report_data["results"]["port_scan"]:
-            scan_data = report_data["results"]["port_scan"]
-            open_tcp = [p["port"] for p in scan_data.get("open_ports", {}).get("tcp", []) if "port" in p]
-            summary["key_findings"]["open_ports_tcp"] = open_tcp
-
-        if "waf" in report_data["results"] and report_data["results"]["waf"] and "error" not in report_data["results"]["waf"]:
-            waf_data = report_data["results"]["waf"]
-            summary["key_findings"]["waf_detected"] = waf_data.get("waf_detected", False)
-            if waf_data.get("waf_detected", False):
-                summary["key_findings"]["waf_name"] = waf_data.get("identified_waf_name", "Unknown") # Changed from waf_name
-
-        if "web_vulns" in report_data["results"] and report_data["results"]["web_vulns"] and "error" not in report_data["results"]["web_vulns"]:
-            vuln_data = report_data["results"]["web_vulns"]
-            if "findings" in vuln_data: # Changed from vulnerabilities to findings to match web_vulnerabilities.py
-                summary["key_findings"]["vulnerabilities"] = vuln_data["findings"]
-
-        summary_file_path = os.path.join(effective_output_dir, f"{safe_target_name}_summary_{timestamp}.json")
-        try:
-            with open(summary_file_path, 'w') as f:
-                json.dump(summary, f, indent=2, default=str)
-            click.echo(f"[+] Summary report saved to: {summary_file_path}")
-        except IOError as e:
-            click.echo(f"[!] Error saving summary report to {summary_file_path}: {e}")
-
-        # Display key findings
-        click.echo("\n" + click.style("=== RECONNAISSANCE SUMMARY ===", fg="green" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
-        click.echo(f"Target: {target} ({target_type or 'Unknown'})") # Added 'Unknown' fallback
-        click.echo(f"Modules run: {len(report_data['modules_run'])}")
-
-        if "dns" in summary["key_findings"] and summary["key_findings"]["dns"].get("a_records"):
-            ip_list = ", ".join(summary["key_findings"]["dns"]["a_records"])
-            click.echo(f"IP Addresses: {ip_list}")
-
-        if "open_ports_tcp" in summary["key_findings"] and summary["key_findings"]["open_ports_tcp"]:
-            ports_list_str = ", ".join(map(str, summary["key_findings"]["open_ports_tcp"])) # Renamed
-            click.echo(f"Open TCP ports: {ports_list_str}")
-
-        if "waf_detected" in summary.get("key_findings", {}):
-            waf_status_val = summary["key_findings"]["waf_detected"]
-            waf_status_text = "Detected" if waf_status_val else "Not detected"
-            waf_name_val = summary["key_findings"].get("waf_name", "Unknown WAF") if waf_status_val else "N/A"
-            click.echo(f"Web Application Firewall: {waf_status_text} ({waf_name_val})")
-
-        if "vulnerabilities" in summary.get("key_findings", {}):
-            vulns = summary["key_findings"]["vulnerabilities"]
-            vuln_count = len(vulns)
-            click.echo(f"Web Vulnerabilities found: {vuln_count}")
-            if vuln_count > 0:
-                for i, vuln in enumerate(vulns[:3], 1):  # Show top 3
-                    severity = vuln.get("risk", "Unknown").upper() # Changed from severity to risk
-                    name = vuln.get("name", "Unknown vulnerability")
-                    if config.DEFAULT_CONFIG["use_color"]:
-                        if severity in ["HIGH", "CRITICAL"]:
-                            severity = click.style(severity, fg="red", bold=True)
-                        elif severity == "MEDIUM":
-                            severity = click.style(severity, fg="yellow")
-                    click.echo(f"  {i}. [{severity}] {name}")
-
-                if vuln_count > 3:
-                    click.echo(f"  ... and {vuln_count - 3} more (see full report for details)")
     elif report and not effective_output_dir:
-        click.echo("[!] Reporting skipped as output directory could not be created or was not specified.")
+        click.echo("[!] Reporting disabled as output directory could not be created or was not specified.")
 
     click.echo("\n" + click.style("=== RECONNAISSANCE COMPLETE ===", fg="green" if config.DEFAULT_CONFIG["use_color"] else None, bold=True))
 
-# API Key Management Commands
+# --- API Key Management Commands (Keep as is) ---
 @cli.group('api')
 def api_group():
     """Manage API keys for various services"""
@@ -496,558 +394,317 @@ def api_group():
 def list_apis(show_keys: bool):
     """List all supported API services and their configuration status"""
     services = config.list_api_services()
-
-    if not services:
-        click.echo("No API services defined.")
-        return
-
-    if config.DEFAULT_CONFIG["output_format"] == "json":
-        click.echo(json.dumps(services, indent=2))
-    else:
-        table_data = []
-        headers = ["Service", "Description", "Status"]
-
+    if not services: click.echo("No API services defined."); return
+    if config.DEFAULT_CONFIG["output_format"] == "json": click.echo(json.dumps(services, indent=2)); return
+    
+    table_data, headers = [], ["Service", "Description", "Status"]
+    if show_keys: headers.append("Keys")
+    for s_item in services:
+        status = "✓ Configured" if s_item["fully_configured"] else "✗ Not Configured"
+        style = click.style(status, fg='green' if s_item["fully_configured"] else 'red') if config.DEFAULT_CONFIG["use_color"] else status
+        row = [f"{s_item['name']} ({s_item['id']})", s_item['description'], style]
         if show_keys:
-            headers.append("Keys")
-
-        for service in services:
-            status_text = "✓ Configured" if service["fully_configured"] else "✗ Not Configured"
-
-            if config.DEFAULT_CONFIG["use_color"]:
-                status_style = click.style(status_text, fg='green' if service["fully_configured"] else 'red')
-            else:
-                status_style = status_text
-
-            row = [
-                f"{service['name']} ({service['id']})",
-                service['description'],
-                status_style
-            ]
-
-            if show_keys:
-                keys_info_parts = []
-                for key_status_item in service["keys"]: # Renamed 'key' to avoid conflict
-                    if key_status_item["configured"]:
-                        key_value = key_status_item["value_preview"] # Already masked
-                        if config.DEFAULT_CONFIG["use_color"]:
-                            key_display_status = click.style(f"{key_status_item['name']}: {key_value}", fg='green')
-                        else:
-                            key_display_status = f"{key_status_item['name']}: {key_value}"
-                    else:
-                        key_display_status = f"{key_status_item['name']}: ✗"
-                        if config.DEFAULT_CONFIG["use_color"]:
-                            key_display_status = click.style(key_display_status, fg='red')
-
-                    keys_info_parts.append(key_display_status)
-
-                row.append('\n'.join(keys_info_parts))
-
-            table_data.append(row)
-
-        click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
+            keys_parts = []
+            for k_stat in s_item["keys"]:
+                val = k_stat["value_preview"] if k_stat["configured"] else "✗"
+                disp = f"{k_stat['name']}: {val}"
+                if config.DEFAULT_CONFIG["use_color"]: disp = click.style(disp, fg='green' if k_stat["configured"] else 'red')
+                keys_parts.append(disp)
+            row.append('\n'.join(keys_parts))
+        table_data.append(row)
+    click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
 
 @api_group.command('configure')
-@click.argument('service_id_arg', metavar='SERVICE_ID', required=False) # Renamed to avoid conflict
+@click.argument('service_id_arg', metavar='SERVICE_ID', required=False)
 def configure_api(service_id_arg: Optional[str]):
-    """Configure API keys for a service (e.g., shodan, censys)"""
+    """Configure API keys for a service"""
     if service_id_arg:
         if service_id_arg not in config.API_DEFINITIONS:
-            available_services = ', '.join(config.API_DEFINITIONS.keys())
-            click.echo(f"Unknown service: {service_id_arg}")
-            click.echo(f"Available services: {available_services}")
-            return
-
-        if config.prompt_for_api_key(service_id_arg):
-            pass # Message is printed by prompt_for_api_key
-        else:
-            click.echo("API key configuration was cancelled or failed.")
+            click.echo(f"Unknown service: {service_id_arg}\nAvailable: {', '.join(config.API_DEFINITIONS.keys())}"); return
+        config.prompt_for_api_key(service_id_arg)
     else:
         services = config.list_api_services()
-        if not services:
-            click.echo("No API services available for configuration.")
-            return
-
+        if not services: click.echo("No API services available."); return
         click.echo("Available API services:")
-        for i, service_item in enumerate(services, 1): # Renamed
-            status_text = "Configured" if service_item["fully_configured"] else "Not Configured"
-            if config.DEFAULT_CONFIG["use_color"]:
-                status_style = click.style(status_text, fg='green' if service_item["fully_configured"] else 'red')
-            else:
-                status_style = status_text
-            click.echo(f"{i}. {service_item['name']} ({service_item['id']}) - {status_style}")
-
+        for i, s_item in enumerate(services, 1):
+            status = "Configured" if s_item["fully_configured"] else "Not Configured"
+            style = click.style(status, fg='green' if s_item["fully_configured"] else 'red') if config.DEFAULT_CONFIG["use_color"] else status
+            click.echo(f"{i}. {s_item['name']} ({s_item['id']}) - {style}")
         try:
-            choice = click.prompt("Select a service to configure (or 0 to cancel)", type=int, default=0)
-            if 0 < choice <= len(services):
-                selected_service_id = services[choice-1]["id"]
-                if config.prompt_for_api_key(selected_service_id):
-                    pass # Message is printed by prompt_for_api_key
-                else:
-                    click.echo("API key configuration was cancelled or failed.")
-            elif choice == 0:
-                click.echo("Configuration cancelled.")
-            else:
-                click.echo("Invalid selection.")
-        except click.exceptions.Abort:
-            click.echo("\nConfiguration aborted.")
-        except Exception as e:
-            click.echo(f"Error during selection: {str(e)}")
+            choice = click.prompt("Select a service to configure (number or 0 to cancel)", type=int, default=0)
+            if 0 < choice <= len(services): config.prompt_for_api_key(services[choice-1]["id"])
+            elif choice == 0: click.echo("Configuration cancelled.")
+            else: click.echo("Invalid selection.")
+        except click.exceptions.Abort: click.echo("\nConfiguration aborted.")
+        except Exception as e: click.echo(f"Error: {str(e)}")
 
 @api_group.command('check')
-@click.argument('module_name_arg', metavar='MODULE_NAME', required=False) # Renamed
-def check_api_requirements_cmd(module_name_arg: Optional[str]): # Renamed command function
-    """Check API requirements for a module or all modules.
-    MODULE_NAME should be the full Python path, e.g., reconpy.modules.passive.shodan_search
-    """
+@click.argument('module_name_arg', metavar='MODULE_NAME', required=False)
+def check_api_requirements_cmd(module_name_arg: Optional[str]):
+    """Check API requirements for a module or all modules."""
     if module_name_arg:
-        result_check = config.check_api_requirements(module_name_arg) # Renamed
-
-        if not result_check["required_services"]:
-            click.echo(f"Module '{module_name_arg}' does not require any API keys.")
-            return
-
+        res = config.check_api_requirements(module_name_arg)
+        if not res["required_services"]: click.echo(f"Module '{module_name_arg}' requires no API keys."); return
         click.echo(f"API requirements for module '{module_name_arg}':")
-
-        for service_id_item in result_check["required_services"]: # Renamed
-            service_info = config.API_DEFINITIONS.get(service_id_item, {})
-            service_name = service_info.get("name", service_id_item)
-
-            status_text = "Configured" if service_id_item not in result_check["missing_services"] else "Not Configured"
-            if config.DEFAULT_CONFIG["use_color"]:
-                status_style = click.style(status_text, fg='green' if service_id_item not in result_check["missing_services"] else 'red')
-            else:
-                status_style = status_text
-            click.echo(f"- {service_name} ({service_id_item}): {status_style}")
-
-        if result_check["all_configured"]:
-            click.echo(click.style("\nAll required API keys are configured.", fg="green" if config.DEFAULT_CONFIG["use_color"] else None))
+        for sid in res["required_services"]:
+            s_info = config.API_DEFINITIONS.get(sid, {})
+            s_name = s_info.get("name", sid)
+            status = "Configured" if sid not in res["missing_services"] else "Not Configured"
+            style = click.style(status, fg='green' if sid not in res["missing_services"] else 'red') if config.DEFAULT_CONFIG["use_color"] else status
+            click.echo(f"- {s_name} ({sid}): {style}")
+        if res["all_configured"]: click.echo(click.style("\nAll required API keys are configured.", fg="green" if config.DEFAULT_CONFIG["use_color"] else None))
         else:
-            missing = [config.API_DEFINITIONS.get(s, {}).get("name", s) for s in result_check["missing_services"]]
-            missing_str = ", ".join(missing)
-            click.echo(click.style(f"\nMissing API keys for: {missing_str}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            click.echo("Configure them with: recon-tool api configure <service_id>")
+            missing = [config.API_DEFINITIONS.get(s, {}).get("name", s) for s in res["missing_services"]]
+            click.echo(click.style(f"\nMissing API keys for: {', '.join(missing)}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
+            click.echo("Configure with: reconpy api configure <service_id>")
     else:
-        # List all modules and their API requirements
-        modules_with_api = []
-
-        for service_id_item, info in config.API_DEFINITIONS.items(): # Renamed
-            for mn in info.get("required_for", []): # Renamed module_name
-                # Check if module already added to prevent duplicates if multiple APIs used by one module
-                if not any(m["module"] == mn for m in modules_with_api):
-                    check_result = config.check_api_requirements(mn)
-                    if check_result["required_services"]: # Only add if it actually requires services
-                         modules_with_api.append(check_result)
-
-        if not modules_with_api:
-            click.echo("No modules found with API requirements.")
-            return
-
-        if config.DEFAULT_CONFIG["output_format"] == "json":
-            click.echo(json.dumps(modules_with_api, indent=2))
-        else:
-            table_data = []
-            headers = ["Module", "Required APIs", "Status"]
-
-            for module_info_item in modules_with_api: # Renamed
-                # Extract simple module name, e.g., "shodan_search" from "reconpy.modules.passive.shodan_search"
-                simple_module_name = module_info_item["module"].split(".")[-1]
-
-                api_services_display = []
-                for service_id_disp in module_info_item["required_services"]: # Renamed
-                    service_name_disp = config.API_DEFINITIONS.get(service_id_disp, {}).get("name", service_id_disp)
-
-                    if service_id_disp in module_info_item["missing_services"]:
-                        if config.DEFAULT_CONFIG["use_color"]:
-                            api_services_display.append(click.style(service_name_disp, fg='red'))
-                        else:
-                            api_services_display.append(f"{service_name_disp} (missing)")
-                    else:
-                        if config.DEFAULT_CONFIG["use_color"]:
-                            api_services_display.append(click.style(service_name_disp, fg='green'))
-                        else:
-                            api_services_display.append(service_name_disp)
-
-                status_text_disp = "Ready" if module_info_item["all_configured"] else "Missing Keys"
-                if config.DEFAULT_CONFIG["use_color"]:
-                    status_style_disp = click.style(status_text_disp, fg='green' if module_info_item["all_configured"] else 'red')
-                else:
-                    status_style_disp = status_text_disp
-
-                table_data.append([
-                    simple_module_name,
-                    ", ".join(api_services_display),
-                    status_style_disp
-                ])
-
-            if table_data:
-                click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
-            else:
-                click.echo("No modules with API requirements found.")
+        modules_api = []
+        for sid, info in config.API_DEFINITIONS.items():
+            for mn in info.get("required_for", []):
+                if not any(m["module"] == mn for m in modules_api):
+                    chk_res = config.check_api_requirements(mn)
+                    if chk_res["required_services"]: modules_api.append(chk_res)
+        if not modules_api: click.echo("No modules found with API requirements."); return
+        if config.DEFAULT_CONFIG["output_format"] == "json": click.echo(json.dumps(modules_api, indent=2)); return
+        
+        table_data, headers = [], ["Module", "Required APIs", "Status"]
+        for mod_info in modules_api:
+            s_mod_name = mod_info["module"].split(".")[-1]
+            apis_disp = []
+            for sid in mod_info["required_services"]:
+                s_name = config.API_DEFINITIONS.get(sid, {}).get("name", sid)
+                color = 'red' if sid in mod_info["missing_services"] else 'green'
+                disp = click.style(s_name, fg=color) if config.DEFAULT_CONFIG["use_color"] else f"{s_name} ({'missing' if sid in mod_info['missing_services'] else 'ok'})"
+                apis_disp.append(disp)
+            status = "Ready" if mod_info["all_configured"] else "Missing Keys"
+            style = click.style(status, fg='green' if mod_info["all_configured"] else 'red') if config.DEFAULT_CONFIG["use_color"] else status
+            table_data.append([s_mod_name, ", ".join(apis_disp), style])
+        if table_data: click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
+        else: click.echo("No modules with API requirements found.")
 
 @api_group.command('clear')
-@click.argument('service_id_arg', metavar='SERVICE_ID') # Renamed
+@click.argument('service_id_arg', metavar='SERVICE_ID')
 @click.option('--confirm', is_flag=True, help='Skip confirmation prompt')
 def clear_api_keys(service_id_arg: str, confirm: bool):
     """Clear API keys for a specific service"""
     if service_id_arg not in config.API_DEFINITIONS:
-        available_services = ', '.join(config.API_DEFINITIONS.keys())
-        click.echo(f"Unknown service: {service_id_arg}")
-        click.echo(f"Available services: {available_services}")
-        return
+        click.echo(f"Unknown service: {service_id_arg}\nAvailable: {', '.join(config.API_DEFINITIONS.keys())}"); return
+    s_name = config.API_DEFINITIONS[service_id_arg]["name"]
+    if not confirm and not click.confirm(f"Clear API keys for {s_name}?"): click.echo("Cancelled."); return
+    
+    keys = config.load_api_keys()
+    if service_id_arg in keys:
+        for k_name in config.API_DEFINITIONS[service_id_arg]["keys"]:
+            if k_name in keys[service_id_arg]: keys[service_id_arg][k_name] = ""
+        if config.save_api_keys(keys): click.echo(f"API keys for {s_name} cleared.")
+        else: click.echo(f"Error clearing API keys for {s_name}.")
+    else: click.echo(f"No API keys configured for {s_name}.")
 
-    service_name = config.API_DEFINITIONS[service_id_arg]["name"]
 
-    if not confirm:
-        if not click.confirm(f"Are you sure you want to clear all API keys for {service_name}? This cannot be undone."):
-            click.echo("Operation cancelled.")
-            return
-
-    api_keys_loaded = config.load_api_keys()
-
-    if service_id_arg in api_keys_loaded:
-        # Clear keys for the service by setting them to empty strings
-        for key_name in config.API_DEFINITIONS[service_id_arg]["keys"]:
-            if key_name in api_keys_loaded[service_id_arg]:
-                api_keys_loaded[service_id_arg][key_name] = "" # Set to empty to clear
-
-        if config.save_api_keys(api_keys_loaded): # This will save empty strings, effectively clearing them from encrypted file
-            click.echo(f"API keys for {service_name} have been cleared.")
-        else:
-            click.echo(f"Error clearing API keys for {service_name}.")
-    else:
-        click.echo(f"No API keys found configured for {service_name}.")
-
-# --- Passive reconnaissance commands ---
+# --- Passive reconnaissance commands (Keep as is, they call _display_result) ---
+# ... (whois_lookup, dns_lookup, web_scrape, shodan_search_cmd, etc. remain structurally the same) ...
 @cli.group('passive')
 def passive_group():
     """Passive reconnaissance commands that don't interact with the target"""
     pass
 
 @passive_group.command('whois')
-@click.argument('domain_arg', metavar='DOMAIN') # Renamed
+@click.argument('domain_arg', metavar='DOMAIN')
 def whois_lookup(domain_arg: str):
-    """Perform WHOIS lookup on a domain"""
     from .modules.passive.whois_lookup import lookup
-    result_data = lookup(domain_arg) # Renamed
-    _display_result(result_data)
+    _display_result(lookup(domain_arg))
 
 @passive_group.command('dns')
-@click.argument('domain_arg', metavar='DOMAIN') # Renamed
-@click.option('--type', '-t', 'record_types_arg', multiple=True,  # Renamed
-              type=click.Choice(['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME', 'ALL'], case_sensitive=False), # Added CNAME
-              default=['A'], help='DNS record type to query')
-def dns_lookup(domain_arg: str, record_types_arg: tuple):
-    """Perform DNS lookups on a domain"""
+@click.argument('domain_arg', metavar='DOMAIN')
+@click.option('--type', '-t', 'record_types_arg', multiple=True,
+              type=click.Choice(['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME', 'ALL'], case_sensitive=False),
+              default=('A',), help='DNS record type to query (default: A)')
+def dns_lookup(domain_arg: str, record_types_arg: Tuple[str, ...]):
     from .modules.passive.dns_enum import lookup
-
-    final_record_types = list(record_types_arg)
-    if 'ALL' in final_record_types:
-        final_record_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME']
-
-    result_data = lookup(domain_arg, record_types=final_record_types) # Renamed
-    _display_result(result_data)
+    final_types = list(record_types_arg)
+    if 'ALL' in final_types: final_types = ['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME']
+    _display_result(lookup(domain_arg, record_types=final_types))
 
 @passive_group.command('web')
-@click.argument('url_arg', metavar='URL') # Renamed
-@click.option('--depth', '-d', type=int, default=1, help='Crawling depth')
+@click.argument('url_arg', metavar='URL')
+@click.option('--depth', '-d', type=int, default=0, help='Crawling depth (0 for single page)')
 def web_scrape(url_arg: str, depth: int):
-    """Extract information from a website"""
     from .modules.passive.web_scraper import scrape
-    result_data = scrape(url_arg, depth=depth) # Renamed
-    _display_result(result_data)
+    _display_result(scrape(url_arg, depth=depth))
 
 @passive_group.command('shodan')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--query', '-q', 'is_query_mode', is_flag=True, help='Perform a custom Shodan query instead of IP lookup') # Renamed
-def shodan_search_cmd(target_arg: str, is_query_mode: bool): # Renamed
-    """Search Shodan for information about a target"""
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--query', '-q', 'is_query_mode_shodan', is_flag=True, help='Perform a custom Shodan query')
+def shodan_search_cmd(target_arg: str, is_query_mode_shodan: bool):
     api_check = config.check_api_requirements("reconpy.modules.passive.shodan_search")
     if not api_check["all_configured"]:
-        click.echo(click.style("Shodan API key is not configured.", fg="yellow" if config.DEFAULT_CONFIG["use_color"] else None))
-        if click.confirm("Would you like to configure it now?"):
-            if not config.prompt_for_api_key("shodan"):
-                 click.echo(click.style("Shodan API key configuration failed or was cancelled. Cannot proceed.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-                 return
-            # Re-check after attempting configuration
-            api_check = config.check_api_requirements("reconpy.modules.passive.shodan_search")
-            if not api_check["all_configured"]:
-                click.echo(click.style("Shodan API key still not configured. Cannot proceed.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-                return
-        else:
-            click.echo(click.style("Shodan search cannot proceed without an API key.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            return
-
+        if not _handle_missing_api_key_prompt("shodan", "Shodan"): return
     from .modules.passive.shodan_search import search_ip, search_query
-
-    if is_query_mode:
-        result_data = search_query(target_arg) # Renamed
-    else:
-        result_data = search_ip(target_arg) # Renamed
-
-    _display_result(result_data)
+    _display_result(search_query(target_arg) if is_query_mode_shodan else search_ip(target_arg))
 
 @passive_group.command('censys')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--certificates', '-c', 'search_certs_mode', is_flag=True, help='Search for certificates instead of host information') # Renamed
-def censys_search_cmd(target_arg: str, search_certs_mode: bool): # Renamed
-    """Search Censys for information about a target"""
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--certificates', '-c', 'search_certs_mode_censys', is_flag=True, help='Search for certificates')
+def censys_search_cmd(target_arg: str, search_certs_mode_censys: bool):
     api_check = config.check_api_requirements("reconpy.modules.passive.censys_search")
     if not api_check["all_configured"]:
-        click.echo(click.style("Censys API keys are not configured.", fg="yellow" if config.DEFAULT_CONFIG["use_color"] else None))
-        if click.confirm("Would you like to configure them now?"):
-            if not config.prompt_for_api_key("censys"):
-                click.echo(click.style("Censys API key configuration failed or was cancelled. Cannot proceed.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-                return
-            api_check = config.check_api_requirements("reconpy.modules.passive.censys_search")
-            if not api_check["all_configured"]:
-                click.echo(click.style("Censys API keys still not configured. Cannot proceed.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-                return
-        else:
-            click.echo(click.style("Censys search cannot proceed without API keys.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            return
-
+        if not _handle_missing_api_key_prompt("censys", "Censys"): return
     from .modules.passive.censys_search import search_ip, search_certificates
-
-    if search_certs_mode:
-        result_data = search_certificates(target_arg) # Renamed
-    else:
-        result_data = search_ip(target_arg) # Renamed
-
-    _display_result(result_data)
+    _display_result(search_certificates(target_arg) if search_certs_mode_censys else search_ip(target_arg))
 
 @passive_group.command('social')
-@click.argument('query_arg', metavar='USERNAME_OR_EMAIL') # Renamed
-@click.option('--email', '-e', 'is_email_search', is_flag=True, help='Search for profiles associated with an email') # Renamed
-def social_media_search(query_arg: str, is_email_search: bool):
-    """Search for social media profiles by username or email"""
+@click.argument('query_arg', metavar='USERNAME_OR_EMAIL')
+@click.option('--email', '-e', 'is_email_search_social', is_flag=True, help='Search by email')
+def social_media_search(query_arg: str, is_email_search_social: bool):
     from .modules.passive.social_media import search_profiles, find_profiles_by_email
-
-    if is_email_search:
-        if not is_valid_email(query_arg):
-            click.echo(click.style(f"Invalid email format: {query_arg}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            return
-        result_data = find_profiles_by_email(query_arg) # Renamed
+    if is_email_search_social:
+        if not is_valid_email(query_arg): click.echo(click.style(f"Invalid email: {query_arg}", fg="red")); return
+        _display_result(find_profiles_by_email(query_arg))
     else:
-        if not query_arg.strip(): # Basic check for empty username
-            click.echo(click.style("Username cannot be empty.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            return
-        result_data = search_profiles(query_arg) # Renamed
-
-    _display_result(result_data)
+        if not query_arg.strip(): click.echo(click.style("Username empty.", fg="red")); return
+        _display_result(search_profiles(query_arg))
 
 @passive_group.command('wayback')
-@click.argument('domain_arg', metavar='DOMAIN') # Renamed
+@click.argument('domain_arg', metavar='DOMAIN')
 @click.option('--from-date', '-f', help='Start date (YYYYMMDD)')
 @click.option('--to-date', '-t', help='End date (YYYYMMDD)')
-@click.option('--limit', '-l', type=int, default=10, help='Maximum number of snapshots')
+@click.option('--limit', '-l', type=int, default=10, help='Max snapshots')
 def wayback_search(domain_arg: str, from_date: Optional[str], to_date: Optional[str], limit: int):
-    """Retrieve historical versions of a website from Wayback Machine"""
     from .modules.passive.wayback_machine import get_snapshots
-    result_data = get_snapshots(domain_arg, from_date=from_date, to_date=to_date, limit=limit) # Renamed
-    _display_result(result_data)
+    _display_result(get_snapshots(domain_arg, from_date=from_date, to_date=to_date, limit=limit))
 
 @passive_group.command('repos')
-@click.argument('target_arg', metavar='DOMAIN_OR_KEYWORD') # Renamed
-@click.option('--check-leaks', '-c', 'check_leaks_mode', is_flag=True, help='Check for potential credential leaks related to the target') # Renamed
-def repo_search(target_arg: str, check_leaks_mode: bool):
-    """Search public code repositories for a domain or check for leaks"""
+@click.argument('target_arg', metavar='DOMAIN_OR_KEYWORD')
+@click.option('--check-leaks', '-c', 'check_leaks_mode_repos', is_flag=True, help='Check for credential leaks')
+def repo_search(target_arg: str, check_leaks_mode_repos: bool):
     api_check = config.check_api_requirements("reconpy.modules.passive.public_repos")
-    if not api_check["all_configured"]:
-        click.echo(click.style("GitHub API key is not configured. Some functionality may be limited or fail.", fg="yellow" if config.DEFAULT_CONFIG["use_color"] else None))
-        if click.confirm("Would you like to configure it now?"):
-            if not config.prompt_for_api_key("github"):
-                click.echo(click.style("GitHub API key configuration failed or was cancelled.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-
+    if not api_check["all_configured"]: _handle_missing_api_key_prompt("github", "GitHub", "Limited functionality.")
     from .modules.passive.public_repos import search_repositories_for_domain, search_for_leaked_credentials
-
-    if check_leaks_mode:
-        result_data = search_for_leaked_credentials(target_arg) # Renamed
+    if check_leaks_mode_repos: _display_result(search_for_leaked_credentials(target_arg))
     else:
-        if not is_valid_domain(target_arg):
-            click.echo(click.style(f"Invalid domain for repository search: {target_arg}. If checking leaks, use --check-leaks.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-            return
-        result_data = search_repositories_for_domain(target_arg) # Renamed
-
-    _display_result(result_data)
+        if not is_valid_domain(target_arg): click.echo(click.style(f"Invalid domain: {target_arg}", fg="red")); return
+        _display_result(search_repositories_for_domain(target_arg))
 
 @passive_group.command('exif')
-@click.argument('target_arg', metavar='IMAGE_URL_OR_FILE') # Renamed
-@click.option('--analyze', '-a', 'analyze_mode', is_flag=True, help='Perform security analysis on metadata') # Renamed
-def exif_extraction(target_arg: str, analyze_mode: bool):
-    """Extract EXIF metadata from images (URL or local file)"""
+@click.argument('target_arg', metavar='IMAGE_URL_OR_FILE')
+@click.option('--analyze', '-a', 'analyze_mode_exif', is_flag=True, help='Perform security analysis')
+def exif_extraction(target_arg: str, analyze_mode_exif: bool):
     from .modules.passive.exif_metadata import extract_from_url, extract_from_file, analyze_image_security
+    res: Optional[Dict[str, Any]] = None
+    if os.path.isfile(target_arg): res = analyze_image_security(target_arg) if analyze_mode_exif else extract_from_file(target_arg)
+    elif is_valid_url(target_arg): res = analyze_image_security(target_arg) if analyze_mode_exif else extract_from_url(target_arg)
+    else: click.echo(click.style(f"Invalid target: '{target_arg}'. Must be file or URL.", fg="red")); return
+    if res: _display_result(res)
 
-    result_data = None # Renamed
-
-    if os.path.isfile(target_arg):
-        if analyze_mode:
-            result_data = analyze_image_security(target_arg)
-        else:
-            result_data = extract_from_file(target_arg)
-    elif is_valid_url(target_arg): # Check if it's a URL
-        if analyze_mode:
-            result_data = analyze_image_security(target_arg)
-        else:
-            result_data = extract_from_url(target_arg)
-    else:
-        click.echo(click.style(f"Invalid target: '{target_arg}'. Must be a valid file path or URL.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-        return
-
-    _display_result(result_data)
-
-# --- Active reconnaissance commands ---
+# --- Active reconnaissance commands (Keep as is, they call _display_result) ---
 @cli.group('active')
 def active_group():
     """Active reconnaissance commands that interact with the target"""
     pass
 
 @active_group.command('scan')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--ports', '-p', default='1-1000', help='Port range to scan (e.g., 1-1000, 22,80,443)')
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--ports', '-p', default='1-1000', help='Port range (e.g., 1-1000, 22,80,443)')
 @click.option('--method', type=click.Choice(['tcp', 'udp', 'both'], case_sensitive=False), default='tcp', help='Scan method')
-@click.option('--threads', '-t', type=int, default=config.DEFAULT_CONFIG["max_threads"], help='Number of threads')
-def port_scan_cmd(target_arg: str, ports: str, method: str, threads: int): # Renamed
-    """Scan for open ports on a target"""
+@click.option('--threads', '-t', type=int, default=config.DEFAULT_CONFIG["max_threads"], help='Threads')
+def port_scan_cmd(target_arg: str, ports: str, method: str, threads: int):
     try:
-        from .modules.active.port_scanner import scan as port_scan_func # Renamed
-        result_data = port_scan_func(target_arg, ports=ports, method=method, threads=threads) # Renamed
-        _display_result(result_data)
-    except ImportError:
-        logger.error("Port scanner module not available (check dependencies).")
-        click.echo(click.style("Port scanner module not available.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-    except Exception as e:
-        logger.error(f"Port scan command failed: {e}")
-        click.echo(click.style(f"Port scan failed: {e}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-
+        from .modules.active.port_scanner import scan as ps_func
+        _display_result(ps_func(target_arg, ports=ports, method=method, threads=threads))
+    except ImportError as e: logger.error(f"Port scanner import error: {e}"); click.echo(click.style(f"Module not available: {e}", fg="red"))
+    except Exception as e_ps: logger.error(f"Port scan failed: {e_ps}", exc_info=True); click.echo(click.style(f"Port scan failed: {e_ps}", fg="red"))
 
 @active_group.command('nmap')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--ports', '-p', default='1-1000', help='Port range to scan')
-@click.option('--scan-type', '-s', type=click.Choice(['sT', 'sS', 'sU', 'sV'], case_sensitive=False), default='sT',
-              help='Nmap scan type')
-@click.option('--args', 'nmap_args', help='Additional Nmap arguments (e.g., "-O -A")') # Added option for more args
-def nmap_scan_cmd(target_arg: str, ports: str, scan_type: str, nmap_args: Optional[str]): # Renamed
-    """Run Nmap scan (requires Nmap to be installed)"""
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--ports', '-p', default='1-1000', help='Port range')
+@click.option('--scan-type', '-s', type=click.Choice(['sT', 'sS', 'sU', 'sV', 'O'], case_sensitive=False), default='sT', help='Nmap scan type')
+@click.option('--args', 'nmap_args_opt', help='Additional Nmap arguments')
+def nmap_scan_cmd(target_arg: str, ports: str, scan_type: str, nmap_args_opt: Optional[str]):
     try:
-        from .modules.active.nmap_scanner import scan as nmap_scan_func # Renamed
-        result_data = nmap_scan_func(target_arg, ports=ports, scan_type=scan_type, arguments=nmap_args) # Renamed
-        _display_result(result_data)
-    except ImportError:
-        logger.error("Nmap scanner module not available or Nmap not installed.")
-        click.echo(click.style("Nmap scanner module not available or Nmap not installed.", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-    except Exception as e:
-        logger.error(f"Nmap scan command failed: {e}")
-        click.echo(click.style(f"Nmap scan failed: {e}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-
+        from .modules.active.nmap_scanner import scan as nmap_func, is_nmap_installed
+        if not is_nmap_installed(): click.echo(click.style("Nmap not installed.", fg="red")); return
+        final_args, final_ports = nmap_args_opt, ports
+        if scan_type.upper() == 'O' and not nmap_args_opt: final_args, final_ports = "-O", ""
+        _display_result(nmap_func(target_arg, ports=final_ports, scan_type=scan_type, arguments=final_args))
+    except ImportError as e: logger.error(f"Nmap import error: {e}"); click.echo(click.style(f"python-nmap not installed: {e}", fg="red"))
+    except Exception as e_nmap: logger.error(f"Nmap scan failed: {e_nmap}", exc_info=True); click.echo(click.style(f"Nmap scan failed: {e_nmap}", fg="red"))
 
 @active_group.command('ping')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--count', '-c', type=int, default=4, help='Number of packets to send')
-def ping_cmd(target_arg: str, count: int): # Renamed
-    """Check if a host is reachable using ICMP Echo"""
-    from .modules.active.ping_traceroute import ping as ping_host_func # Renamed
-    result_data = ping_host_func(target_arg, count=count) # Renamed
-    _display_result(result_data)
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--count', '-c', type=int, default=4, help='Packets to send')
+def ping_cmd(target_arg: str, count: int):
+    from .modules.active.ping_traceroute import ping as ping_func
+    _display_result(ping_func(target_arg, count=count))
 
 @active_group.command('traceroute')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--max-hops', type=int, default=30, help='Maximum number of hops')
-def traceroute_cmd(target_arg: str, max_hops: int): # Renamed
-    """Trace route to a host"""
-    from .modules.active.ping_traceroute import traceroute as trace_route_func # Renamed
-    result_data = trace_route_func(target_arg, max_hops=max_hops) # Renamed
-    _display_result(result_data)
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--max-hops', type=int, default=30, help='Max hops')
+def traceroute_cmd(target_arg: str, max_hops: int):
+    from .modules.active.ping_traceroute import traceroute as trace_func
+    _display_result(trace_func(target_arg, max_hops=max_hops))
 
 @active_group.command('banner')
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--port', '-p', type=int, required=True, help='Port to connect to')
-@click.option('--protocol', type=click.Choice(['tcp', 'udp'], case_sensitive=False), default='tcp', help='Protocol to use')
-def grab_banner_cmd(target_arg: str, port: int, protocol: str): # Renamed
-    """Grab banner from a service"""
-    from .modules.active.banner_grabber import grab_banner as grab_banner_func # Renamed
-    result_data = grab_banner_func(target_arg, port=port, protocol=protocol) # Renamed
-    _display_result(result_data)
+@click.argument('target_arg', metavar='TARGET')
+@click.option('--port', '-p', type=int, required=True, help='Port')
+@click.option('--protocol', type=click.Choice(['tcp', 'udp'], case_sensitive=False), default='tcp', help='Protocol')
+def grab_banner_cmd(target_arg: str, port: int, protocol: str):
+    from .modules.active.banner_grabber import grab_banner as gb_func
+    _display_result(gb_func(target_arg, port=port, protocol=protocol))
 
 @active_group.command('waf')
-@click.argument('url_arg', metavar='URL') # Renamed
-def detect_waf_cmd(url_arg: str): # Renamed
-    """Detect Web Application Firewall on a website"""
-    from .modules.active.waf_detector import detect as detect_waf_func # Renamed
-    result_data = detect_waf_func(url_arg) # Renamed
-    _display_result(result_data)
+@click.argument('url_arg', metavar='URL')
+def detect_waf_cmd(url_arg: str):
+    from .modules.active.waf_detector import detect as dw_func
+    _display_result(dw_func(url_arg))
 
 @active_group.command('webscan')
-@click.argument('url_arg', metavar='URL') # Renamed
-@click.option('--full', '-f', is_flag=True, help='Perform a full scan (slower but more thorough)')
-def scan_web_vulnerabilities_cmd(url_arg: str, full: bool): # Renamed
-    """Scan for common web vulnerabilities"""
-    from .modules.active.web_vulnerabilities import scan as web_vuln_scan_func # Renamed
-    result_data = web_vuln_scan_func(url_arg, full_scan=full) # Renamed # Changed full to full_scan
-    _display_result(result_data)
+@click.argument('url_arg', metavar='URL')
+@click.option('--full', '-f', 'full_scan_web', is_flag=True, help='Perform full scan')
+def scan_web_vulnerabilities_cmd(url_arg: str, full_scan_web: bool):
+    from .modules.active.web_vulnerabilities import scan as wvs_func
+    _display_result(wvs_func(url_arg, full_scan=full_scan_web))
 
-# --- Utility commands ---
+# --- Utility commands (Keep as is, they call _display_result) ---
 @cli.group('util')
 def util_group():
     """Utility commands for various tasks"""
     pass
 
 @util_group.command('validate')
-@click.argument('target_arg', metavar='TARGET_TO_VALIDATE') # Renamed
-@click.option('--type', '-t', 'type_to_validate', # Renamed
+@click.argument('target_arg', metavar='TARGET_TO_VALIDATE')
+@click.option('--type', '-t', 'type_to_validate_arg',
               type=click.Choice(['ip', 'domain', 'url', 'email'], case_sensitive=False),
               help='Type of target to validate')
-def validate_target_cmd(target_arg: str, type_to_validate: Optional[str]): # Renamed
-    """Validate a target (IP, domain, URL, email)"""
-    result_val = {"target": target_arg, "type_validated_as": None, "is_valid": False} # Renamed
-
-    if type_to_validate:
-        # Validate specific type
-        result_val["type_validated_as"] = type_to_validate
-        if type_to_validate == 'ip':
-            result_val["is_valid"] = is_valid_ip(target_arg)
-        elif type_to_validate == 'domain':
-            result_val["is_valid"] = is_valid_domain(target_arg)
-        elif type_to_validate == 'url':
-            result_val["is_valid"] = is_valid_url(target_arg)
-        elif type_to_validate == 'email':
-            result_val["is_valid"] = is_valid_email(target_arg)
+def validate_target_cmd(target_arg: str, type_to_validate_arg: Optional[str]):
+    res: Dict[str, Any] = {"target": target_arg, "type_validated_as": None, "is_valid": False}
+    if type_to_validate_arg:
+        res["type_validated_as"] = type_to_validate_arg
+        if type_to_validate_arg == 'ip': res["is_valid"] = is_valid_ip(target_arg)
+        elif type_to_validate_arg == 'domain': res["is_valid"] = is_valid_domain(target_arg)
+        elif type_to_validate_arg == 'url': res["is_valid"] = is_valid_url(target_arg)
+        elif type_to_validate_arg == 'email': res["is_valid"] = is_valid_email(target_arg)
     else:
-        # Auto-detect type
-        if is_valid_ip(target_arg):
-            result_val["is_valid"] = True
-            result_val["type_validated_as"] = "ip"
-        elif is_valid_url(target_arg): # Check URL before domain, as valid URLs can contain valid domains
-            result_val["is_valid"] = True
-            result_val["type_validated_as"] = "url"
-        elif is_valid_domain(target_arg):
-            result_val["is_valid"] = True
-            result_val["type_validated_as"] = "domain"
-        elif is_valid_email(target_arg):
-            result_val["is_valid"] = True
-            result_val["type_validated_as"] = "email"
-        else:
-            result_val["is_valid"] = False
-            result_val["type_validated_as"] = "unknown"
-
-    _display_result(result_val)
+        if is_valid_ip(target_arg): res.update({"is_valid": True, "type_validated_as": "ip"})
+        elif is_valid_url(target_arg): res.update({"is_valid": True, "type_validated_as": "url"})
+        elif is_valid_domain(target_arg): res.update({"is_valid": True, "type_validated_as": "domain"})
+        elif is_valid_email(target_arg): res.update({"is_valid": True, "type_validated_as": "email"})
+        else: res.update({"is_valid": False, "type_validated_as": "unknown"})
+    _display_result(res)
 
 @util_group.command('format')
 @click.argument('input_file', type=click.Path(exists=True, dir_okay=False, readable=True))
-@click.option('--output-format', '-of', 'output_format_arg', # Renamed and metavar added
-              type=click.Choice(['json', 'csv', 'text'], case_sensitive=False), default='json',
+@click.option('--output-format', '-of', 'output_format_util',
+              type=click.Choice(['json', 'csv', 'text', 'html'], case_sensitive=False), default='json',
               help='Output format')
-@click.option('--output-file', '-f', type=click.Path(dir_okay=False, writable=True),
+@click.option('--output-file', '-f', 'output_file_util', type=click.Path(dir_okay=False, writable=True),
               help='Output file (stdout if not specified)')
-def format_conversion(input_file: str, output_format_arg: str, output_file: Optional[str]):
-    """Convert reconnaissance data files between formats (JSON, CSV, Text)"""
+def format_conversion(input_file: str, output_format_util: str, output_file_util: Optional[str]):
     from .utils.formatters import convert_file_format
-    result_data = convert_file_format(input_file, output_format=output_format_arg, output_file=output_file) # Renamed
-    if "error" in result_data:
-        click.echo(click.style(f"Error: {result_data['error']}", fg="red" if config.DEFAULT_CONFIG["use_color"] else None))
-    elif result_data.get("message"):
-        click.echo(click.style(result_data["message"], fg="green" if config.DEFAULT_CONFIG["use_color"] else None))
-        if result_data.get("output_content"): # If writing to stdout
-            click.echo(result_data["output_content"])
+    res = convert_file_format(input_file, output_format=output_format_util, output_file=output_file_util)
+    if "error" in res: click.echo(click.style(f"Error: {res['error']}", fg="red"))
+    elif res.get("message"):
+        click.echo(click.style(res["message"], fg="green"))
+        if res.get("output_content") and not output_file_util: click.echo(res["output_content"])
 
 # --- Workflow commands ---
 @cli.group('workflow')
@@ -1058,212 +715,187 @@ def workflow_group():
 @workflow_group.command('list')
 def list_workflows():
     """List available reconnaissance workflows"""
-    # Assuming workflows are in a 'workflows' directory relative to this script/package
-    # For a package, this path needs to be handled carefully, e.g., using importlib.resources
     base_path = os.path.dirname(os.path.abspath(__file__))
     workflows_dir = os.path.join(base_path, 'workflows')
-
-    if not os.path.exists(workflows_dir) or not os.path.isdir(workflows_dir):
-        click.echo(f"Workflows directory not found at {workflows_dir}")
-        click.echo("Create a 'workflows' directory in the same location as main.py and add JSON workflow files.")
-        return
-
-    workflows = []
-    for filename in os.listdir(workflows_dir):
-        if filename.endswith('.json'):
+    if not os.path.isdir(workflows_dir):
+        click.echo(f"Workflows directory not found: {workflows_dir}"); return
+    
+    wf_list_data = []
+    for fname in os.listdir(workflows_dir):
+        if fname.endswith('.json'):
             try:
-                with open(os.path.join(workflows_dir, filename), 'r') as f:
-                    workflow_data = json.load(f) # Renamed
-                    workflows.append({
-                        "name": workflow_data.get("name", os.path.splitext(filename)[0]), # Use filename without ext if no name
-                        "description": workflow_data.get("description", "No description"),
-                        "modules_count": len(workflow_data.get("modules", [])), # Renamed for clarity
-                        "filename": filename
+                with open(os.path.join(workflows_dir, fname), 'r', encoding='utf-8') as f:
+                    content = json.load(f)
+                    wf_list_data.append({
+                        "name": content.get("name", os.path.splitext(fname)[0]),
+                        "description": content.get("description", "N/A"),
+                        "modules_count": len(content.get("modules", [])),
+                        "filename": fname
                     })
-            except json.JSONDecodeError:
-                logger.warning(f"Skipping invalid JSON workflow file: {filename}")
-            except Exception as e:
-                logger.warning(f"Error loading workflow file {filename}: {e}")
+            except Exception as e: logger.warning(f"Error loading workflow {fname}: {e}")
+    
+    if not wf_list_data: click.echo("No valid workflows found."); return
+    if config.DEFAULT_CONFIG["output_format"] == "json": click.echo(json.dumps(wf_list_data, indent=2)); return
+    
+    table = [[wf["name"], wf["description"], wf["modules_count"], wf["filename"]] for wf in wf_list_data]
+    click.echo(tabulate(table, headers=["Name", "Description", "Modules", "Filename"], tablefmt="simple"))
 
-    if not workflows:
-        click.echo("No valid workflows found in the 'workflows' directory.")
-        return
-
-    if config.DEFAULT_CONFIG["output_format"] == "json":
-        click.echo(json.dumps(workflows, indent=2))
-    else:
-        table_data = [[wf["name"], wf["description"], wf["modules_count"], wf["filename"]] for wf in workflows]
-        headers = ["Name", "Description", "Modules", "Filename"]
-        click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
 
 @workflow_group.command('run')
-@click.argument('workflow_name_or_path', metavar='WORKFLOW_NAME_OR_PATH') # Renamed
-@click.argument('target_arg', metavar='TARGET') # Renamed
-@click.option('--output-dir', '-d', type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True), help='Directory to save results')
-def run_workflow(workflow_name_or_path: str, target_arg: str, output_dir: Optional[str]):
+@click.argument('workflow_name_or_path_run', metavar='WORKFLOW_NAME_OR_PATH')
+@click.argument('target_arg_run', metavar='TARGET')
+@click.option('--output-dir', '-d', 'output_dir_wf_run', type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True), help='Directory to save results')
+def run_workflow(workflow_name_or_path_run: str, target_arg_run: str, output_dir_wf_run: Optional[str]):
     """Run a predefined reconnaissance workflow on a target"""
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    workflows_dir = os.path.join(base_path, 'workflows')
+    base_path_wf = os.path.dirname(os.path.abspath(__file__))
+    workflows_dir_wf = os.path.join(base_path_wf, 'workflows')
+    workflow_file: Optional[str] = None
 
-    workflow_file = None
-    # Check if it's an absolute or relative path
-    if os.path.exists(workflow_name_or_path) and workflow_name_or_path.endswith('.json'):
-        workflow_file = workflow_name_or_path
+    if os.path.exists(workflow_name_or_path_run) and workflow_name_or_path_run.endswith('.json'):
+        workflow_file = workflow_name_or_path_run
     else:
-        # Try to find it in the workflows directory
-        potential_file = os.path.join(workflows_dir, f"{workflow_name_or_path}.json")
-        if os.path.exists(potential_file):
-            workflow_file = potential_file
-        else: # Try without .json extension if user provided it
-            potential_file_no_ext = os.path.join(workflows_dir, workflow_name_or_path)
-            if os.path.exists(potential_file_no_ext) and workflow_name_or_path.endswith('.json'):
-                 workflow_file = potential_file_no_ext
+        potential_file = os.path.join(workflows_dir_wf, f"{workflow_name_or_path_run}.json" if not workflow_name_or_path_run.endswith(".json") else workflow_name_or_path_run)
+        if os.path.exists(potential_file): workflow_file = potential_file
 
     if not workflow_file:
-        click.echo(f"Workflow '{workflow_name_or_path}' not found in {workflows_dir} or as a direct path.")
-        return
+        click.echo(f"Workflow '{workflow_name_or_path_run}' not found."); return
 
     try:
-        with open(workflow_file, 'r') as f:
-            workflow_data = json.load(f) # Renamed
+        with open(workflow_file, 'r', encoding='utf-8') as f: workflow_content = json.load(f)
+    except Exception as e: click.echo(f"Error loading workflow file {workflow_file}: {e}"); return
 
-        click.echo(f"Running workflow: {workflow_data.get('name', os.path.basename(workflow_file))}")
-        click.echo(f"Description: {workflow_data.get('description', 'No description')}")
+    click.echo(f"Running workflow: {workflow_content.get('name', os.path.basename(workflow_file))}")
+    click.echo(f"Description: {workflow_content.get('description', 'N/A')}")
 
-        # Validate target
-        target_type_wf = None # Renamed
-        if is_valid_ip(target_arg): target_type_wf = "ip"
-        elif is_valid_url(target_arg): target_type_wf = "url"
-        elif is_valid_domain(target_arg): target_type_wf = "domain"
+    target_type_wf: Optional[str] = None
+    if is_valid_ip(target_arg_run): target_type_wf = "ip"
+    elif is_valid_url(target_arg_run): target_type_wf = "url"
+    elif is_valid_domain(target_arg_run): target_type_wf = "domain"
+    if not target_type_wf: click.echo(f"Invalid target for workflow: {target_arg_run}"); return
 
-        if not target_type_wf:
-            click.echo(f"Invalid target for workflow: {target_arg}")
-            return
+    effective_output_dir_wf: Optional[str] = None
+    workflow_run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_target_name_wf = re.sub(r'[^\w\-_\.]', '_', target_arg_run)
+    wf_name_for_dir = os.path.splitext(os.path.basename(workflow_file))[0]
 
-        # Set up output directory for workflow run
-        effective_wf_output_dir = output_dir
-        if not effective_wf_output_dir and config.DEFAULT_CONFIG.get("save_results", False):
-            safe_target_name_wf = re.sub(r'[^\w\-_\.]', '_', target_arg)
-            wf_name_for_dir = os.path.splitext(os.path.basename(workflow_file))[0]
-            effective_wf_output_dir = os.path.join(config.RESULTS_DIR, f"{safe_target_name_wf}_workflow_{wf_name_for_dir}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
-            click.echo(f"[+] Defaulting workflow output to: {effective_wf_output_dir}")
+    if output_dir_wf_run:
+        effective_output_dir_wf = os.path.join(output_dir_wf_run, f"{safe_target_name_wf}_workflow_{wf_name_for_dir}_{workflow_run_timestamp}")
+    elif config.DEFAULT_CONFIG.get("save_results", False): # Use default if saving is on
+        effective_output_dir_wf = os.path.join(config.RESULTS_DIR, f"{safe_target_name_wf}_workflow_{wf_name_for_dir}_{workflow_run_timestamp}")
+    
+    if effective_output_dir_wf:
+        click.echo(f"[+] Workflow output will be in: {effective_output_dir_wf}")
+        try:
+            os.makedirs(effective_output_dir_wf, exist_ok=True)
+        except OSError as e:
+            click.echo(f"[!] Error creating workflow output directory {effective_output_dir_wf}: {e}. File saving disabled.")
+            effective_output_dir_wf = None
+    
+    consolidated_wf_results: Dict[str, Any] = {
+        "workflow_name": workflow_content.get('name', os.path.basename(workflow_file)),
+        "target": target_arg_run, "target_type": target_type_wf, "timestamp": workflow_run_timestamp,
+        "modules_data": {}
+    }
 
-        if effective_wf_output_dir:
-            try:
-                os.makedirs(effective_wf_output_dir, exist_ok=True)
-            except OSError as e:
-                click.echo(f"[!] Error creating workflow output directory {effective_wf_output_dir}: {e}. Results will not be saved to files.")
-                effective_wf_output_dir = None
+    for mod_spec in workflow_content.get("modules", []):
+        mod_name, mod_type, mod_opts = mod_spec.get("name"), mod_spec.get("type", "passive").lower(), mod_spec.get("options", {})
+        if not mod_name: click.echo("  Skipping module with no name."); continue
+        click.echo(f"\nRunning {mod_type} module: {mod_name}")
 
-        # Run workflow modules
-        modules_to_run = workflow_data.get("modules", [])
-        for module_spec in modules_to_run: # Renamed
-            module_name_wf = module_spec.get("name") # Renamed
-            module_type_wf = module_spec.get("type", "passive").lower() # Renamed
-            module_options_wf = module_spec.get("options", {}) # Renamed
+        try:
+            full_mod_path = f"reconpy.modules.{mod_type}.{mod_name}"
+            api_check = config.check_api_requirements(full_mod_path)
+            if not api_check["all_configured"]:
+                missing = ", ".join([config.API_DEFINITIONS.get(s,{}).get("name",s) for s in api_check.get("missing_services",[])])
+                click.echo(click.style(f"  Skipping {mod_name} due to missing API keys for: {missing}", fg="yellow"))
+                if not _handle_missing_api_key_prompt(api_check["missing_services"][0] if api_check["missing_services"] else "unknown", 
+                                                      config.API_DEFINITIONS.get(api_check["missing_services"][0],{}).get("name","?") if api_check["missing_services"] else "?",
+                                                      "Module cannot run."):
+                    consolidated_wf_results["modules_data"][mod_name] = {"error": f"Skipped: Missing API keys for {missing}"}; continue
+            
+            mod_obj = importlib.import_module(f".modules.{mod_type}.{mod_name}", package=__package__)
+            action_fn = next((getattr(mod_obj, fn) for fn in ["scan","lookup","search","detect","get_snapshots","scrape","ping","traceroute","grab_banner"] if hasattr(mod_obj, fn)), None)
+            if not action_fn:
+                click.echo(f"  Module {mod_name} has no compatible interface."); consolidated_wf_results["modules_data"][mod_name] = {"error":"No compatible interface."}; continue
+            
+            mod_result_data: Dict[str, Any]
+            try: mod_result_data = action_fn(target_arg_run, **mod_opts)
+            except TypeError as te:
+                if ("unexpected keyword argument" in str(te) or "got multiple values for argument" in str(te)) and not mod_opts:
+                    try: mod_result_data = action_fn(target_arg_run)
+                    except TypeError as te2: click.echo(f"  Module {mod_name} call failed: {te2}"); consolidated_wf_results["modules_data"][mod_name] = {"error":f"Call failed: {te2}"}; continue
+                elif "required positional argument" in str(te):
+                    click.echo(f"  Module {mod_name} missing required args: {te}"); consolidated_wf_results["modules_data"][mod_name] = {"error":f"Missing args: {te}"}; continue
+                else: raise te
+            
+            _display_result(mod_result_data)
+            consolidated_wf_results["modules_data"][mod_name] = mod_result_data
 
-            if not module_name_wf:
-                click.echo(f"  Skipping module with no name in workflow.")
-                continue
-
-            click.echo(f"\nRunning {module_type_wf} module: {module_name_wf}")
-
-            try:
-                # Construct full module path (e.g., reconpy.modules.passive.shodan_search)
-                full_module_path = f"reconpy.modules.{module_type_wf}.{module_name_wf}"
-
-                # Check API requirements
-                api_check_wf = config.check_api_requirements(full_module_path)
-                if not api_check_wf["all_configured"]:
-                    missing_apis = ", ".join(api_check_wf.get("missing_services", ["Unknown"]))
-                    click.echo(click.style(f"  Skipping module {module_name_wf} due to missing API keys for: {missing_apis}", fg="yellow" if config.DEFAULT_CONFIG["use_color"] else None))
-                    continue
-
-                # Dynamically import the module
-                module_obj = importlib.import_module(f".modules.{module_type_wf}.{module_name_wf}", package="recon_tool") # Corrected package name
-
-                # Determine the function to call (scan, lookup, search are common patterns)
-                action_func = None
-                if hasattr(module_obj, "scan"): action_func = module_obj.scan
-                elif hasattr(module_obj, "lookup"): action_func = module_obj.lookup
-                elif hasattr(module_obj, "search"): action_func = module_obj.search
-                elif hasattr(module_obj, "detect"): action_func = module_obj.detect # For waf_detector
-                # Add more common function names if needed
-
-                if not action_func:
-                    click.echo(f"  Module {module_name_wf} does not have a compatible interface (scan, lookup, search, detect).")
-                    continue
-
-                # Call the function with target and options
-                # Some modules might not take **module_options_wf if they are simple
+            if effective_output_dir_wf:
+                mod_json_path = os.path.join(effective_output_dir_wf, f"{safe_target_name_wf}_workflow_module_{mod_name}_{workflow_run_timestamp}.json")
+                mod_html_path = os.path.join(effective_output_dir_wf, f"{safe_target_name_wf}_workflow_module_{mod_name}_{workflow_run_timestamp}.html")
                 try:
-                    if module_options_wf:
-                        result_data_wf = action_func(target_arg, **module_options_wf) # Renamed
-                    else:
-                        result_data_wf = action_func(target_arg) # Renamed
-                except TypeError as te: # Handle cases where module doesn't accept **kwargs
-                    if "unexpected keyword argument" in str(te) and not module_options_wf:
-                         result_data_wf = action_func(target_arg)
-                    elif "required positional argument" in str(te) and not module_options_wf: # e.g. port_scanner.scan needs ports
-                         click.echo(f"  Module {module_name_wf} seems to require options that were not provided in workflow: {te}")
-                         continue
-                    else:
-                        raise te # Re-raise if it's a different TypeError
+                    with open(mod_json_path, 'w', encoding='utf-8') as f: json.dump(mod_result_data, f, indent=2, default=str)
+                    click.echo(f"  Workflow module JSON results saved: {mod_json_path}")
+                    from .utils.formatters import format_output
+                    mod_html_content = format_output(mod_result_data, output_format="html")
+                    with open(mod_html_path, 'w', encoding='utf-8') as f: f.write(mod_html_content)
+                    click.echo(f"  Workflow module HTML results saved: {mod_html_path}")
+                except Exception as e: click.echo(f"  Error saving/formatting module {mod_name} results: {e}")
 
-                _display_result(result_data_wf)
+        except ImportError as e: click.echo(f"  Error importing module {mod_name} ({full_mod_path}): {e}"); consolidated_wf_results["modules_data"][mod_name]={"error":f"Import error: {e}"}
+        except Exception as e: click.echo(f"  Error running module {mod_name}: {e}"); consolidated_wf_results["modules_data"][mod_name]={"error":f"Runtime error: {e}"}; logger.exception(f"Full error in module {mod_name}:")
+    
+    if effective_output_dir_wf:
+        consolidated_json_path = os.path.join(effective_output_dir_wf, f"{safe_target_name_wf}_workflow_{wf_name_for_dir}_consolidated_{workflow_run_timestamp}.json")
+        consolidated_html_path = os.path.join(effective_output_dir_wf, f"{safe_target_name_wf}_workflow_{wf_name_for_dir}_consolidated_{workflow_run_timestamp}.html")
+        try:
+            with open(consolidated_json_path, 'w', encoding='utf-8') as f: json.dump(consolidated_wf_results, f, indent=2, default=str)
+            click.echo(f"\n[+] Consolidated workflow JSON report saved: {consolidated_json_path}")
+            from .utils.formatters import format_output
+            html_content = format_output(consolidated_wf_results, output_format="html")
+            with open(consolidated_html_path, 'w', encoding='utf-8') as f: f.write(html_content)
+            click.echo(f"[+] Consolidated workflow HTML report saved: {consolidated_html_path}")
+        except Exception as e: click.echo(f"[!] Error saving consolidated workflow reports: {e}"); logger.error(f"Consolidated workflow report error: {e}", exc_info=True)
+    
+    click.echo("\nWorkflow execution completed.")
 
-                if effective_wf_output_dir and config.DEFAULT_CONFIG.get("save_results", True):
-                    safe_target_name_wf_file = re.sub(r'[^\w\-_\.]', '_', target_arg)
-                    output_file_path = os.path.join(effective_wf_output_dir, f"{safe_target_name_wf_file}_{module_name_wf}.json")
-                    try:
-                        with open(output_file_path, 'w') as f:
-                            json.dump(result_data_wf, f, indent=2, default=str)
-                        click.echo(f"  Results saved to: {output_file_path}")
-                    except IOError as e:
-                        click.echo(f"  Error saving {module_name_wf} results to {output_file_path}: {e}")
-            except ImportError:
-                click.echo(f"  Error importing module {module_name_wf} (path: {full_module_path}). Ensure it exists.")
-            except Exception as e:
-                click.echo(f"  Error running module {module_name_wf}: {str(e)}")
-                if config.DEFAULT_CONFIG["verbosity"] >= config.VerbosityLevel.DEBUG:
-                    logger.exception(f"Full error in module {module_name_wf}:")
 
-        click.echo("\nWorkflow execution completed.")
-
-    except json.JSONDecodeError:
-        click.echo(f"Error: Workflow file '{workflow_file}' is not valid JSON.")
-    except Exception as e:
-        click.echo(f"Error loading or running workflow: {str(e)}")
-        if config.DEFAULT_CONFIG["verbosity"] >= config.VerbosityLevel.DEBUG:
-            logger.exception("Full error during workflow execution:")
-
-# Utility to display results based on output format
-def _display_result(result_data): # Renamed
-    """Display results in the configured format"""
-    output_format_disp = config.DEFAULT_CONFIG["output_format"] # Renamed
-
+def _display_result(result_data_display: Optional[Dict[str, Any]]):
+    if result_data_display is None: click.echo("No results to display."); return
     from .utils.formatters import format_output
-    formatted_output = format_output(result_data, output_format_disp) # Renamed
+    click.echo(format_output(result_data_display, config.DEFAULT_CONFIG["output_format"]))
 
-    click.echo(formatted_output)
+def _handle_missing_api_key_prompt(service_id: str, service_name: str, extra_message: str = "") -> bool:
+    """Helper for API key prompts. Returns True if OK to proceed."""
+    click.echo(click.style(f"{service_name} API key not configured. {extra_message}", fg="yellow"))
+    if click.confirm(f"Configure {service_name} API key now?"):
+        if not config.prompt_for_api_key(service_id):
+            click.echo(click.style(f"{service_name} API key config failed/cancelled.", fg="red")); return False
+        
+        mod_path_check = next((mod for sid, info in config.API_DEFINITIONS.items() for mod in info.get("required_for",[]) if sid == service_id), "")
+        if not mod_path_check: # Fallback if not found via API_DEFINITIONS structure
+            if service_id == "github": mod_path_check = "reconpy.modules.passive.public_repos"
+            elif service_id == "virustotal": mod_path_check = "reconpy.modules.active.web_vulnerabilities"
+            elif service_id in ["shodan", "censys"]: mod_path_check = f"reconpy.modules.passive.{service_id}_search"
+        
+        if mod_path_check:
+            api_check_post_prompt = config.check_api_requirements(mod_path_check)
+            if not api_check_post_prompt["all_configured"]:
+                click.echo(click.style(f"{service_name} API key still not configured properly.", fg="red")); return False
+        click.echo(click.style(f"{service_name} API key configured.", fg="green")); return True
+    else:
+        click.echo(click.style(f"{service_name} operation cannot proceed without API key.", fg="red")); return False
 
-# Main entry point
 def main_entry():
-    try:
-        # The cli object is already initialized with verbosity by Click when options are parsed.
-        # The setup_logger is now called within the cli() function itself.
-        cli(standalone_mode=False) # standalone_mode=False to prevent Click from exiting prematurely
+    try: cli(standalone_mode=False)
     except Exception as e:
-        # Logger might not be fully configured if error is very early, so also print
         print(f"Critical Error: {str(e)}", file=sys.stderr)
-        if logger.handlers: # Check if logger has handlers
+        if logger.handlers:
             if config.DEFAULT_CONFIG.get("verbosity", config.VerbosityLevel.NORMAL) >= config.VerbosityLevel.DEBUG:
-                logger.exception("An unhandled error occurred:")
-            else:
-                logger.error(f"Error: {str(e)}")
+                logger.exception("Unhandled error:")
+            else: logger.error(f"Error: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    # This is for direct execution of main.py (e.g. python reconpy/main.py)
-    # The `run_recon.py` or `setup.py` entry point is preferred.
     main_entry()
