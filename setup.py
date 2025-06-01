@@ -25,12 +25,12 @@ except FileNotFoundError:
 setup(
     name="reconpy", # Name for PyPI - should be unique, changed from "recon_tool"
     version="0.1.0", # Should match config.VERSION ideally, or manage version centrally
-    author="Your Name", # Replace with your name/handle
-    author_email="your.email@example.com", # Replace with your email
+    author="Ravindhar V", # Replace with your name/handle
+    author_email="ravindhar.upm@gmail.com", # Replace with your email
     description="A cross-platform Python CLI reconnaissance tool.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/recon_tool", # Replace with your project's URL
+    url="https://github.com/RavindharCYS/recon_tool", # Replace with your project's URL
     
     # find_packages() will discover the 'recon_tool' package directory.
     # If you have other top-level packages, list them or use include/exclude.
@@ -74,7 +74,7 @@ setup(
     
     # Optional: links to project homepage, documentation, source code, etc.
     project_urls={
-        'Bug Reports': 'https://github.com/yourusername/recon_tool/issues',
-        'Source': 'https://github.com/yourusername/recon_tool/',
+        'Bug Reports': 'https://github.com/RavindharCYS/recon_tool/issues',
+        'Source': 'https://github.com/RavindharCYS/recon_tool/',
     },
 )

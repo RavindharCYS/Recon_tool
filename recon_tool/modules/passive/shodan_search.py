@@ -61,19 +61,19 @@ def search_ip(target: str) -> Dict[str, Any]:
             logger.info(f"Resolved domain {target} to IP {ip_address}")
         except Exception as e:
             logger.error(f"Could not resolve domain {target}: {str(e)}")
-            return {"target": target, "error": f"Could not resolve domain: {str(e)}"}
+            return {"target_input": target, "error": f"Could not resolve domain: {str(e)}"}
     elif is_valid_ip(target):
         ip_address = target
     else:
         logger.error(f"Invalid target format: {target}. Expected IP address or domain.")
-        return {"target": target, "error": "Invalid target format. Expected IP address or domain."}
+        return {"target_input": target, "error": "Invalid target format. Expected IP address or domain."}
 
     if not ip_address: # Should not happen if logic above is correct
-        return {"target": target, "error": "Failed to determine IP address for Shodan search."}
+        return {"target_input": target, "error": "Failed to determine IP address for Shodan search."}
 
     api = _get_shodan_api()
     if not api:
-        return {"target": target, "ip": ip_address, "error": "Shodan API key not configured or invalid."}
+        return {"target_input": target, "ip": ip_address, "error": "Shodan API key not configured or invalid."}
     
     try:
         host_info = api.host(ip_address)
@@ -126,12 +126,21 @@ def search_ip(target: str) -> Dict[str, Any]:
         
     except shodan.APIError as e:
         error_msg = str(e)
+        logger.debug(f"Full Shodan APIError for IP {ip_address}: {e}")
         if "No information available" in error_msg or "not found" in error_msg.lower():
             logger.info(f"No Shodan information available for IP {ip_address}")
             return {
                 "target_input": target,
                 "ip": ip_address,
                 "info": "No information available in Shodan for this IP."
+            }
+        elif "Access denied" in error_msg or "403" in error_msg: # MODIFIED SECTION
+            user_advice = "Please check your Shodan API key, account plan, and billing status. The key might be invalid, expired, or lack permissions for this query."
+            logger.error(f"Shodan API access denied for IP {ip_address}: {error_msg}. {user_advice}")
+            return {
+                "target_input": target, 
+                "ip": ip_address, 
+                "error": f"Shodan API error: {error_msg}. {user_advice}"
             }
         else:
             logger.error(f"Shodan API error for IP {ip_address}: {error_msg}")
@@ -207,8 +216,9 @@ def search_query(query: str, limit: int = 10, page: int = 1, facets: Optional[st
             }
             # Clean up None values
             processed_match = {k:v for k,v in processed_match.items() if v is not None and (not isinstance(v, (dict, list)) or v) }
-            processed_match["location"] = {k:v for k,v in processed_match.get("location",{}).items() if v is not None}
-            if not processed_match["location"]: del processed_match["location"]
+            if "location" in processed_match: # Ensure location key exists before trying to clean it
+                processed_match["location"] = {k:v for k,v in processed_match.get("location",{}).items() if v is not None}
+                if not processed_match["location"]: del processed_match["location"]
 
 
             results["matches"].append(processed_match)
@@ -217,8 +227,18 @@ def search_query(query: str, limit: int = 10, page: int = 1, facets: Optional[st
         return results
         
     except shodan.APIError as e:
-        logger.error(f"Shodan API error for query '{query}': {str(e)}")
-        return {"query": query, "error": f"Shodan API error: {str(e)}"}
+        error_msg = str(e)
+        logger.debug(f"Full Shodan APIError for query '{query}': {e}")
+        if "Access denied" in error_msg or "403" in error_msg: # MODIFIED SECTION
+            user_advice = "Please check your Shodan API key, account plan, and billing status. The key might be invalid, expired, or lack permissions for this query."
+            logger.error(f"Shodan API access denied for query '{query}': {error_msg}. {user_advice}")
+            return {
+                "query": query, 
+                "error": f"Shodan API error: {error_msg}. {user_advice}"
+            }
+        else:
+            logger.error(f"Shodan API error for query '{query}': {error_msg}")
+            return {"query": query, "error": f"Shodan API error: {error_msg}"}
     
     except Exception as e:
         logger.error(f"Error executing Shodan search for query '{query}': {str(e)}")
@@ -249,8 +269,12 @@ def get_shodan_api_info() -> Dict[str, Any]:
             "telnet": api_info.get("telnet")
         }
     except shodan.APIError as e:
-        logger.error(f"Shodan API error while fetching API info: {str(e)}")
-        return {"error": f"Shodan API error: {str(e)}"}
+        error_msg = str(e) # ADDED
+        user_advice = "" # ADDED
+        if "Access denied" in error_msg or "403" in error_msg: # ADDED
+            user_advice = " Please check your Shodan API key and account status." # ADDED
+        logger.error(f"Shodan API error while fetching API info: {error_msg}{user_advice}") # MODIFIED
+        return {"error": f"Shodan API error: {error_msg}{user_advice}"} # MODIFIED
     except Exception as e:
         logger.error(f"Unexpected error fetching Shodan API info: {str(e)}")
         return {"error": f"Unexpected error: {str(e)}"}
