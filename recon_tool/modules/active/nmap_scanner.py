@@ -100,8 +100,8 @@ def scan(target: str, ports: str = "1-1000", scan_type: str = "sT", arguments: s
                 "host": host,
                 "status": nm[host].state(),
                 "hostnames": nm[host].hostnames(),
-                "addresses": nm[host].addresses(),
-                "vendor": nm[host].vendor() if hasattr(nm[host], 'vendor') else {},
+                "addresses": nm[host].get('addresses', {}), # CORRECTED LINE
+                "vendor": nm[host].vendor() if hasattr(nm[host], 'vendor') else {}, # vendor() is a method, but also accessible as nm[host]['vendor']
                 "open_ports": [],
                 "filtered_ports": [],
                 "closed_ports": []
@@ -112,13 +112,13 @@ def scan(target: str, ports: str = "1-1000", scan_type: str = "sT", arguments: s
                 host_info["protocol"] = proto
                 
                 # Get all ports for this protocol
-                ports = sorted(nm[host][proto].keys())
+                ports_data = sorted(nm[host][proto].keys()) # Renamed ports to ports_data
                 
                 # Process each port
-                for port in ports:
-                    port_info = nm[host][proto][port]
-                    port_data = {
-                        "port": port,
+                for port_item in ports_data: # Renamed port to port_item
+                    port_info = nm[host][proto][port_item]
+                    port_data_detail = { # Renamed port_data to port_data_detail
+                        "port": port_item,
                         "state": port_info["state"],
                         "service": port_info["name"],
                         "product": port_info.get("product", ""),
@@ -130,15 +130,19 @@ def scan(target: str, ports: str = "1-1000", scan_type: str = "sT", arguments: s
                     
                     # Categorize by state
                     if port_info["state"] == "open":
-                        host_info["open_ports"].append(port_data)
+                        host_info["open_ports"].append(port_data_detail)
                     elif port_info["state"] == "filtered":
-                        host_info["filtered_ports"].append(port_data)
+                        host_info["filtered_ports"].append(port_data_detail)
                     elif port_info["state"] == "closed":
-                        host_info["closed_ports"].append(port_data)
+                        host_info["closed_ports"].append(port_data_detail)
             
             # Add OS detection results if available
-            if hasattr(nm[host], 'osclass') and nm[host].osclass():
-                host_info["os_detection"] = nm[host].osclass()
+            # Check for 'osmatch' which contains the OS guesses, not 'osclass'
+            if 'osmatch' in nm[host] and nm[host]['osmatch']:
+                host_info["os_detection"] = nm[host]['osmatch']
+            # Fallback for older python-nmap or different structures if osclass was intended
+            elif hasattr(nm[host], 'osclass') and nm[host].osclass(): 
+                 host_info["os_detection_legacy_osclass"] = nm[host].osclass()
             
             # Add host to results
             result["hosts"].append(host_info)
@@ -249,7 +253,7 @@ def scan_service_versions(target: str, ports: str) -> Dict[str, Any]:
     logger.info(f"Starting service version detection for {target} on ports {ports}")
     
     # Use the main scan function with service detection enabled
-    return scan(target, ports=ports, scan_type="sV", arguments="-sV --version-intensity 7")
+    return scan(target, ports=ports, scan_type="sV", arguments="-sV --version-intensity 7") # sV is already a scan type argument
 
 def scan_os_detection(target: str) -> Dict[str, Any]:
     """
@@ -271,5 +275,8 @@ def scan_os_detection(target: str) -> Dict[str, Any]:
             "suggestion": "Run this tool with administrator privileges."
         }
     
-    # Use the main scan function with OS detection enabled
-    return scan(target, scan_type="sS", arguments="-O")
+    # Use the main scan function with OS detection enabled argument
+    # Nmap uses -O for OS detection. sS is a common prerequisite for effective -O.
+    # If only OS detection is desired, -O is the primary argument.
+    # It's better to pass -O as the argument rather than as scan_type.
+    return scan(target, ports="", scan_type="sS", arguments="-O") # sS can be default with -O

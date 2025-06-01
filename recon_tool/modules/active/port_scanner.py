@@ -1,3 +1,4 @@
+# recon_tool/modules/active/port_scanner.py
 """
 Port Scanner Module - Scan for open ports using native Python sockets.
 Provides a basic TCP and UDP port scanning capability.
@@ -9,6 +10,7 @@ import queue # For managing ports in threaded scanning
 import time
 from typing import Dict, List, Any, Optional, Set, Tuple # Added Set, Tuple
 import ipaddress # For IP range scanning
+from datetime import datetime # <--- ADDED THIS LINE
 
 from ...config import DEFAULT_TIMEOUT, QUICK_TIMEOUT # UPDATED: Relative import, added QUICK_TIMEOUT
 from ...utils.validators import is_valid_ip, is_valid_domain # UPDATED: Relative import

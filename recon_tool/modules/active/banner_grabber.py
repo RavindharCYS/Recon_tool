@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Union
 import re
-import telnetlib # For Telnet
+# import telnetlib # For Telnet <--- REMOVE THIS LINE
 from ftplib import FTP, error_perm, error_temp, error_proto # For FTP
 
 from ...config import DEFAULT_TIMEOUT, QUICK_TIMEOUT, DEFAULT_USER_AGENT # UPDATED
@@ -360,20 +360,26 @@ def _grab_ssh_banner_protocol(ip: str, port: int, timeout: float) -> Dict[str, A
 
 def _grab_telnet_banner_protocol(ip: str, port: int, timeout: float) -> Dict[str, Any]:
     output: Dict[str, Any] = {}
+    telnetlib = None # Initialize to None
     try:
-        # telnetlib is more robust for handling Telnet negotiations (IAC, DO, DONT, WILL, WONT)
+        import telnetlib # Try to import telnetlib for Python 2 or if available
+    except ImportError:
+        logger.warning("telnetlib module not found (Python 2 stdlib). Telnet banner grabbing will use generic TCP.")
+        # Fallback to generic TCP immediately if telnetlib is not found
+        generic_res = _grab_generic_tcp_banner(ip, port, timeout)
+        if generic_res.get("banner_text"): output["banner_text"] = generic_res["banner_text"]
+        if generic_res.get("banner_hex"): output["banner_hex"] = generic_res["banner_hex"]
+        if not output.get("error") and generic_res.get("error"): output["error"] = generic_res.get("error")
+        return output
+
+    try:
+        # This block will only be reached if 'import telnetlib' above was successful
         with telnetlib.Telnet(ip, port, timeout) as tn_conn: # Renamed tn to tn_conn
-            # Read a bit of data, Telnet banners can be verbose or interactive
-            # expect() can look for login prompts
-            # For a simple banner, read_very_eager or read_some
-            # Let's try to read until a common prompt or timeout
             try:
-                # Read until a login prompt or a few newlines, or timeout
-                # This is heuristic
-                banner_bytes = tn_conn.read_until(b"login:", timeout=timeout/2) # Try to read up to login prompt
-                if not banner_bytes: # If no login prompt, try to read some initial data
-                    banner_bytes = tn_conn.read_very_eager() # Non-blocking read
-                if not banner_bytes: # If still nothing, try a newline
+                banner_bytes = tn_conn.read_until(b"login:", timeout=timeout/2) 
+                if not banner_bytes: 
+                    banner_bytes = tn_conn.read_very_eager() 
+                if not banner_bytes: 
                     tn_conn.write(b"\n")
                     time.sleep(0.2)
                     banner_bytes = tn_conn.read_very_eager()
@@ -381,20 +387,25 @@ def _grab_telnet_banner_protocol(ip: str, port: int, timeout: float) -> Dict[str
                 if banner_bytes:
                     output["banner_text"] = _clean_banner_text(banner_bytes)
                     output["banner_hex"] = banner_bytes.hex()
-            except EOFError: # Connection closed by remote host
+            except EOFError: 
                  output["additional_info"] = {"status": "Connection closed by remote host during banner grab."}
-            # tn.close() happens automatically with 'with'
     except socket.timeout:
         output["error"] = "Timeout"
     except ConnectionRefusedError:
         output["error"] = "Connection refused"
+    except AttributeError: # If telnetlib was imported but is not the expected Python 2 version
+        logger.warning("telnetlib was imported but seems incompatible. Falling back to generic TCP for Telnet.")
+        generic_res = _grab_generic_tcp_banner(ip, port, timeout)
+        if generic_res.get("banner_text"): output["banner_text"] = generic_res["banner_text"]
+        if generic_res.get("banner_hex"): output["banner_hex"] = generic_res["banner_hex"]
+        if not output.get("error") and generic_res.get("error"): output["error"] = generic_res.get("error")
     except Exception as e:
         output["error"] = f"Telnet error: {type(e).__name__} - {str(e)}"
-        # Fallback for telnetlib issues
-        if not output.get("banner_text"):
+        if not output.get("banner_text"): # Fallback if telnetlib specific code failed
              generic_res = _grab_generic_tcp_banner(ip, port, timeout)
              if generic_res.get("banner_text"): output["banner_text"] = generic_res["banner_text"]
              if generic_res.get("banner_hex"): output["banner_hex"] = generic_res["banner_hex"]
+             if not output.get("error") and generic_res.get("error"): output["error"] = generic_res.get("error")
 
     return output
 
@@ -460,9 +471,3 @@ def _grab_imap_banner_protocol(ip: str, port: int, timeout: float) -> Dict[str, 
     except Exception as e:
         output["error"] = f"IMAP error: {type(e).__name__} - {str(e)}"
     return output
-
-# scan_ports_with_banners function was removed as it's very similar to 
-# the functionality within the main port_scanner.py or nmap_scanner.py,
-# and banner grabbing is now integrated into the all_in_one_recon flow.
-# If you need a standalone multi-port banner grabber, it could be added back.
-
